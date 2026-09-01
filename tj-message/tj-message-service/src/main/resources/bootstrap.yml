@@ -46,3 +46,7 @@ tj:
         - /users/ids
   jdbc:
     database: tj_message
+  sms:
+    ali:
+      accessId: LTAI5tHyKqhaN6k3u2jVeiX6
+      accessSecret: ACCESS_SECRET_XXX_REVOKED
