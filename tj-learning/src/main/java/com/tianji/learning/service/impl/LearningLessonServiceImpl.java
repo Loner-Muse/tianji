@@ -127,8 +127,11 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
             //查询课程消息(注意:极少数下架课程可能查不到,不做强制绑定)
             CourseSimpleInfoDTO courseSimpleInfoDTO = courseMap.get(learningLesson.getCourseId());
             if(courseSimpleInfoDTO != null){
-                //封装课程消息
-                BeanUtils.copyProperties(courseSimpleInfoDTO, lessonVO);
+                //封装课程消息:DTO字段名(name/coverUrl/sectionNum)与VO(courseName/courseCoverUrl/sections)不一致,
+                //copyProperties按字段名匹配拷贝不到,必须手动set
+                lessonVO.setCourseName(courseSimpleInfoDTO.getName());
+                lessonVO.setCourseCoverUrl(courseSimpleInfoDTO.getCoverUrl());
+                lessonVO.setSections(courseSimpleInfoDTO.getSectionNum());
             }
             voLessonList.add(lessonVO);
         }
