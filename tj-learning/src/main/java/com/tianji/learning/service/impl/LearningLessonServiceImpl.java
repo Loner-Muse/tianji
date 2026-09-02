@@ -124,10 +124,12 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         for(LearningLesson learningLesson:list){
             LearningLessonVO lessonVO = new LearningLessonVO();
             BeanUtils.copyProperties(learningLesson, lessonVO);
-            //查询课程消息
+            //查询课程消息(注意:极少数下架课程可能查不到,不做强制绑定)
             CourseSimpleInfoDTO courseSimpleInfoDTO = courseMap.get(learningLesson.getCourseId());
-            //封装课程消息
-            BeanUtils.copyProperties(courseSimpleInfoDTO, lessonVO);
+            if(courseSimpleInfoDTO != null){
+                //封装课程消息
+                BeanUtils.copyProperties(courseSimpleInfoDTO, lessonVO);
+            }
             voLessonList.add(lessonVO);
         }
         return PageDTO.of(page, voLessonList);
@@ -199,10 +201,9 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         if(lesson==null){
             return null;
         }
-        //3.判断课程状态是否为学习中
-        if(!lesson.getStatus().equals(LessonStatus.LEARNING.getValue())){
-            log.error("课程状态不是学习中");
-
+        //3.判断课程状态是否为学习中,不是则视为课程无效
+        if(lesson.getStatus() != LessonStatus.LEARNING){
+            return null;
         }
         return lesson.getId();
     }
@@ -268,15 +269,12 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         if(lesson==null){
             throw new IllegalArgumentException("课程学习课程不存在");
         }
-        if(!lesson.getPlanStatus().equals(PlanStatus.PLAN_RUNNING)){
-            //修改课程状态为学习中，并且设置学习频率为freq
+        //设置学习频率(是否为首次创建计划,决定是否要把计划状态置为"计划进行中")
+        if(lesson.getPlanStatus() != PlanStatus.PLAN_RUNNING){
             lesson.setPlanStatus(PlanStatus.PLAN_RUNNING);
-            lesson.setWeekFreq(freq);
-            updateById(lesson);
-
         }
-        //在进行中，修改学习频率为freq
         lesson.setWeekFreq(freq);
+        //一次update完成:状态(如果需要) + 频率
         updateById(lesson);
     }
 
@@ -308,9 +306,9 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
                 .gt(LearningRecord::getFinishTime, begin)
                 .lt(LearningRecord::getFinishTime, end));
         result.setWeekFinished(weekFinished.intValue());
-        // 3.2.本周总的计划学习小节数量
+        // 3.2.本周总的计划学习小节数量(SUM无数据时MySQL返回NULL,兜底为0)
         Integer weekTotalPlan = getBaseMapper().queryTotalPlan(userId);
-        result.setWeekTotalPlan(weekTotalPlan);
+        result.setWeekTotalPlan(weekTotalPlan == null ? 0 : weekTotalPlan);
         // 4.查询分页数据
         // 4.1.分页查询"有学习计划"的课表,按最近学习时间倒序
         Page<LearningLesson> p = lambdaQuery()
