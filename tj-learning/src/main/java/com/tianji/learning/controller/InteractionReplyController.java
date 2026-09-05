@@ -1,9 +1,13 @@
 package com.tianji.learning.controller;
 
 
-import org.springframework.web.bind.annotation.RequestMapping;
-
-import org.springframework.web.bind.annotation.RestController;
+import com.tianji.common.domain.dto.PageDTO;
+import com.tianji.learning.domain.dto.ReplyDTO;
+import com.tianji.learning.domain.query.ReplyPageQuery;
+import com.tianji.learning.domain.vo.ReplyVO;
+import com.tianji.learning.service.IInteractionReplyService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
 
 /**
  * <p>
@@ -15,6 +19,15 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/interaction-reply")
+@RequiredArgsConstructor
 public class InteractionReplyController {
-
+    private final IInteractionReplyService replyService;
+    @PostMapping("/replies")
+    public void saveReply(ReplyDTO replyFormDTO) {
+        replyService.saveReply(replyFormDTO);
+    }
+    @GetMapping("/replies/page")
+    public PageDTO<ReplyVO> getReplyPage(ReplyPageQuery replyPageQuery) {
+        return replyService.getReplyPage(replyPageQuery);
+    }
 }

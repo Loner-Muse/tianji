@@ -48,12 +48,4 @@ public class InteractionQuestionController {
     public void deleteQuestion(@PathVariable Long id){
         questionService.deleteQuestion(id);
     }
-    @PutMapping("/admin/questions/{id}/hidden/{hidden}")
-    public void hiddenQuestion(@PathVariable Long id,@PathVariable Boolean hidden){
-        questionService.hiddenQuestion(id,hidden);
-    }
-    @GetMapping("/admin/questions/{id}")
-    public QuestionVO queryQuestionByIdAdmin(@PathVariable Long id){
-        return questionService.queryQuestionByid(id);
-    }
 }
