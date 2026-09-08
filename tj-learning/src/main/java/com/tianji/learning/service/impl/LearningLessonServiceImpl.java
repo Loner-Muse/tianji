@@ -167,20 +167,25 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         //获取用户的课程id，根据课程id查询课程相关内容
         CourseFullInfoDTO courseInfoById = courseClient.getCourseInfoById(lesson.getCourseId(), false, false);
         //将课程相关内容封装到vo对象
-        lessonVO.setCourseName(courseInfoById.getName());
-        lessonVO.setCourseCoverUrl(courseInfoById.getCoverUrl());
-        lessonVO.setSections(courseInfoById.getSectionNum());
+        if (courseInfoById != null) {
+            lessonVO.setCourseName(courseInfoById.getName());
+            lessonVO.setCourseCoverUrl(courseInfoById.getCoverUrl());
+            lessonVO.setSections(courseInfoById.getSectionNum());
+        }
         //查询用户的课程总数
-        Integer count = lambdaQuery().eq(LearningLesson::getUserId,userId)
+        Long count = lambdaQuery().eq(LearningLesson::getUserId,userId)
                 .count();
-        lessonVO.setCourseAmount(count);
+        lessonVO.setCourseAmount(count != null ? count.intValue() : 0);
         //根据最近章节的id查询章节详情
-        List<CataSimpleInfoDTO> cataSimpleInfoDTOS = catalogueClient.batchQueryCatalogue(CollUtils.singletonList(lesson.getLatestSectionId()));
+        if (lesson.getLatestSectionId() != null) {
+            List<CataSimpleInfoDTO> cataSimpleInfoDTOS = catalogueClient.batchQueryCatalogue(
+                    CollUtils.singletonList(lesson.getLatestSectionId()));
 
-        if(!cataSimpleInfoDTOS.isEmpty()){
-            CataSimpleInfoDTO cataSimpleInfoDTO = cataSimpleInfoDTOS.get(0);
-            lessonVO.setLatestSectionName(cataSimpleInfoDTO.getName());
-            lessonVO.setLatestSectionIndex(cataSimpleInfoDTO.getCIndex());
+            if (!cataSimpleInfoDTOS.isEmpty()) {
+                CataSimpleInfoDTO cataSimpleInfoDTO = cataSimpleInfoDTOS.get(0);
+                lessonVO.setLatestSectionName(cataSimpleInfoDTO.getName());
+                lessonVO.setLatestSectionIndex(cataSimpleInfoDTO.getCIndex());
+            }
         }
 
         //
@@ -303,12 +308,12 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         LocalDateTime end = DateUtils.getWeekEndTime(now);
         // 3.查询总的统计数据
         // 3.1.本周总的已学习小节数量
-        Integer weekFinished = recordMapper.selectCount(new LambdaQueryWrapper<LearningRecord>()
+        Long weekFinished = recordMapper.selectCount(new LambdaQueryWrapper<LearningRecord>()
                 .eq(LearningRecord::getUserId, userId)
                 .eq(LearningRecord::getFinished, true)
                 .gt(LearningRecord::getFinishTime, begin)
                 .lt(LearningRecord::getFinishTime, end));
-        result.setWeekFinished(weekFinished.intValue());
+        result.setWeekFinished(weekFinished != null ? weekFinished.intValue() : 0);
         // 3.2.本周总的计划学习小节数量(SUM无数据时MySQL返回NULL,兜底为0)
         Integer weekTotalPlan = getBaseMapper().queryTotalPlan(userId);
         result.setWeekTotalPlan(weekTotalPlan == null ? 0 : weekTotalPlan);

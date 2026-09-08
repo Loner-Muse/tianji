@@ -214,6 +214,7 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
     }
 
     @Override
+    @Transactional
     public void updateHidden(Long id, Boolean hidden) {
         // 1.参数校验
         if (hidden == null) {

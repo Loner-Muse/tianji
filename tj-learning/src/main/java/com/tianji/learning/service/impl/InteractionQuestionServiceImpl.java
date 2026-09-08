@@ -169,7 +169,7 @@ public class InteractionQuestionServiceImpl extends ServiceImpl<InteractionQuest
         InteractionQuestion interactionQuestion = baseMapper.selectById(id);
         //2.判断是否存在
         if(interactionQuestion == null){
-            throw new IllegalArgumentException("问题不存在");
+            throw new BadRequestException("问题不存在");
         }
         //3.转换属性
         QuestionVO questionVO = BeanUtils.copyBean(interactionQuestion, QuestionVO.class);
@@ -204,7 +204,7 @@ public class InteractionQuestionServiceImpl extends ServiceImpl<InteractionQuest
             throw new BadRequestException("问题不存在");
         }
         //4.判断是否是当前用户的问题
-        if (!interactionQuestion.getUserId().equals(user)) {
+        if (!Objects.equals(interactionQuestion.getUserId(), user)) {
             throw new BadRequestException("您没有权限删除该问题");
         }
         //5.级联删除该问题下的所有回答（防孤儿数据）
