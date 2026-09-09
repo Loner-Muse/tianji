@@ -9,6 +9,8 @@ import com.tianji.learning.service.IInteractionReplyService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
+
 /**
  * <p>
  * 互动问题的回答或评论 前端控制器
@@ -23,7 +25,7 @@ import org.springframework.web.bind.annotation.*;
 public class InteractionReplyController {
     private final IInteractionReplyService replyService;
     @PostMapping("/replies")
-    public void saveReply(ReplyDTO replyFormDTO) {
+    public void saveReply(@Valid @RequestBody ReplyDTO replyFormDTO) {
         replyService.saveReply(replyFormDTO);
     }
     @GetMapping("/replies/page")
