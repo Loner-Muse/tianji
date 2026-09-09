@@ -173,7 +173,7 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
             lessonVO.setSections(courseInfoById.getSectionNum());
         }
         //查询用户的课程总数
-        Long count = lambdaQuery().eq(LearningLesson::getUserId,userId)
+        Integer count = lambdaQuery().eq(LearningLesson::getUserId,userId)
                 .count();
         lessonVO.setCourseAmount(count != null ? count.intValue() : 0);
         //根据最近章节的id查询章节详情
@@ -308,7 +308,7 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
         LocalDateTime end = DateUtils.getWeekEndTime(now);
         // 3.查询总的统计数据
         // 3.1.本周总的已学习小节数量
-        Long weekFinished = recordMapper.selectCount(new LambdaQueryWrapper<LearningRecord>()
+        Integer weekFinished = recordMapper.selectCount(new LambdaQueryWrapper<LearningRecord>()
                 .eq(LearningRecord::getUserId, userId)
                 .eq(LearningRecord::getFinished, true)
                 .gt(LearningRecord::getFinishTime, begin)

@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -111,5 +112,34 @@ public class LikedRecordServiceImpl extends ServiceImpl<LikedRecordMapper, Liked
         record.setBizType(recordDTO.getBizType());
         save(record);
         return true;
+    }
+
+    /**
+     * 定时任务调用:读取某业务类型(bizType)的点赞总数并发送MQ通知业务方更新。
+     * <p>数据库版实现:按 bizId 分组统计点赞记录数,逐一封装 LikedTimesDTO 并发送。
+     * (生产环境高并发建议改用 Redis 版 LikedRecordRedisServiceImpl,这里保留数据库版兜底)</p>
+     *
+     * @param bizType    业务类型(如 QA/NOTE)
+     * @param maxBizSize 单批最多处理的业务数量
+     */
+    @Override
+    public void readLikedTimesAndSendMessage(String bizType, int maxBizSize) {
+        // 1.按 biz_id 分组统计该业务类型下各业务的点赞数
+        List<LikedRecord> records = lambdaQuery()
+                .eq(LikedRecord::getBizType, bizType)
+                .list();
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        // 2.按 bizId 聚合点赞数
+        Map<Long, Long> countMap = records.stream()
+                .collect(Collectors.groupingBy(LikedRecord::getBizId, Collectors.counting()));
+        // 3.封装DTO并发送MQ(受 maxBizSize 限制,防止单次发送量过大)
+        countMap.entrySet().stream()
+                .limit(maxBizSize)
+                .forEach(entry -> mqHelper.send(
+                        LIKE_RECORD_EXCHANGE,
+                        StringUtils.format(LIKED_TIMES_KEY_TEMPLATE, bizType),
+                        LikedTimesDTO.of(entry.getKey(), entry.getValue().intValue())));
     }
 }
