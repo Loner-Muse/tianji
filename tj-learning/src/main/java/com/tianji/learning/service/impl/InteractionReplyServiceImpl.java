@@ -23,6 +23,7 @@ import com.tianji.learning.service.IInteractionQuestionService;
 import com.tianji.learning.service.IInteractionReplyService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,8 +48,11 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Service
 public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMapper, InteractionReply> implements IInteractionReplyService {
-    @Lazy // 打破 InteractionQuestionService↔ReplyService 的循环依赖
-    private final IInteractionQuestionService questionService;
+    // 用字段注入 + @Lazy 打破 InteractionQuestionService↔ReplyService 的循环依赖
+    // (不能放构造器:Lombok @RequiredArgsConstructor 不会把 @Lazy 传给构造器参数)
+    @Autowired
+    @Lazy
+    private IInteractionQuestionService questionService;
     private final UserClient userClient;
     private final RabbitMqHelper rabbitMqHelper;
 
