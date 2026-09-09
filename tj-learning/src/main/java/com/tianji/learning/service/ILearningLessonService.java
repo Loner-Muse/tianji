@@ -5,6 +5,7 @@ import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.common.domain.query.PageQuery;
 import com.tianji.learning.domain.po.LearningLesson;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.tianji.learning.domain.query.MyLessonPageQuery;
 import com.tianji.learning.domain.vo.LearningLessonVO;
 import com.tianji.learning.domain.vo.LearningPlanPageVO;
 import org.hibernate.validator.constraints.Range;
@@ -27,7 +28,7 @@ public interface ILearningLessonService extends IService<LearningLesson> {
 
 
 
-    PageDTO<LearningLessonVO> queryMyLessonPage(PageQuery query);
+    PageDTO<LearningLessonVO> queryMyLessonPage(MyLessonPageQuery query);
 
     LearningLessonVO queryNowLesson();
 

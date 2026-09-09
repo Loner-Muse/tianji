@@ -11,6 +11,7 @@ import com.tianji.api.dto.course.CourseSimpleInfoDTO;
 import com.tianji.api.dto.leanring.LearningLessonDTO;
 import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.common.domain.query.PageQuery;
+import com.tianji.learning.domain.query.MyLessonPageQuery;
 import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
@@ -97,11 +98,14 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
      * @return 课表分页结果
      */
     @Override
-    public PageDTO<LearningLessonVO> queryMyLessonPage(PageQuery query) {
+    public PageDTO<LearningLessonVO> queryMyLessonPage(MyLessonPageQuery query) {
         //1.获取用户id
         Long userId = UserContext.getUser();
         //2.根据用户id查询课程列表
-        Page<LearningLesson> page = lambdaQuery().eq(LearningLesson::getUserId, userId).page(query.toMpPage("latest_learn_time", false));
+        Page<LearningLesson> page = lambdaQuery()
+                .eq(LearningLesson::getUserId, userId)
+                .eq(query.getStatus() != null, LearningLesson::getStatus, query.getStatus())
+                .page(query.toMpPage("latest_learn_time", false));
         List<LearningLesson> list = page.getRecords();
         if (list.isEmpty()) {
             return PageDTO.of(page, new ArrayList<>());   // 直接返回空分页

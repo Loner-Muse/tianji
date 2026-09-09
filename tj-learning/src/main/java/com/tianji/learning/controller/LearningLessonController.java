@@ -7,6 +7,7 @@ import com.tianji.api.dto.leanring.LearningLessonDTO;
 import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.common.domain.query.PageQuery;
 import com.tianji.learning.domain.dto.LearningPlanDTO;
+import com.tianji.learning.domain.query.MyLessonPageQuery;
 import com.tianji.learning.domain.vo.LearningLessonVO;
 import com.tianji.learning.domain.vo.LearningPlanPageVO;
 import com.tianji.learning.service.ILearningLessonService;
@@ -41,7 +42,7 @@ public class LearningLessonController {
      */
     @ApiOperation("分页查询我的课表")
     @GetMapping("/page")
-    public PageDTO<LearningLessonVO> queryMyLessonPage(PageQuery query) {
+    public PageDTO<LearningLessonVO> queryMyLessonPage(MyLessonPageQuery query) {
         return learningLessonService.queryMyLessonPage(query);
     }
 
