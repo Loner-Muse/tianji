@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.tianji.api.client.user.UserClient;
 import com.tianji.api.dto.user.UserDTO;
+import com.tianji.common.autoconfigure.mq.RabbitMqHelper;
+import com.tianji.common.constants.MqConstants;
 import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.common.exceptions.BadRequestException;
 import com.tianji.common.utils.BeanUtils;
@@ -46,6 +48,7 @@ import java.util.stream.Collectors;
 public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMapper, InteractionReply> implements IInteractionReplyService {
     private final IInteractionQuestionService questionService;
     private final UserClient userClient;
+    private final RabbitMqHelper rabbitMqHelper;
 
     @Override
     @Transactional
@@ -69,6 +72,8 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
                     .set(InteractionQuestion::getLatestAnswerId, reply.getId())
                     .eq(InteractionQuestion::getId, replyFormDTO.getQuestionId())
                     .update();
+            //发送消息到队列
+            rabbitMqHelper.send(MqConstants.Exchange.LEARNING_EXCHANGE, MqConstants.Key.WRITE_REPLY, userId);
         } else {
             //4b.评论：先校验上级回答存在（查的是本表，不是问题表），再插入，最后累加评论数
             InteractionReply parent = getById(replyFormDTO.getAnswerId());
@@ -81,6 +86,7 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
                     .eq(InteractionReply::getId, replyFormDTO.getAnswerId())
                     .update();
         }
+
         //5.学生提交的，把问题标记为未查看，提醒管理端有新动态
         if (Boolean.TRUE.equals(replyFormDTO.getIsStudent())) {
             questionService.lambdaUpdate()

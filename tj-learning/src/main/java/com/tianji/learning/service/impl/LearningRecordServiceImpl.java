@@ -6,6 +6,8 @@ import com.tianji.api.client.course.CourseClient;
 import com.tianji.api.dto.course.CourseFullInfoDTO;
 import com.tianji.api.dto.leanring.LearningLessonDTO;
 import com.tianji.api.dto.leanring.LearningRecordDTO;
+import com.tianji.common.autoconfigure.mq.RabbitMqHelper;
+import com.tianji.common.constants.MqConstants;
 import com.tianji.common.exceptions.BizIllegalException;
 import com.tianji.common.exceptions.DbException;
 import com.tianji.common.utils.BeanUtils;
@@ -41,6 +43,8 @@ public class LearningRecordServiceImpl extends ServiceImpl<LearningRecordMapper,
     private final CourseClient courseClient;
     // 延迟任务处理器:视频进度高频上报时,先写Redis缓存、停顿20秒再落库一次(防抖合并写)
     private final LearningRecordDelayTaskHandler taskHandler;
+    // 消息队列助手
+    private final RabbitMqHelper rabbitMqHelper;
 
     /**
      * 查询指定课程的学习记录
@@ -102,6 +106,9 @@ public class LearningRecordServiceImpl extends ServiceImpl<LearningRecordMapper,
         }
         // 3.处理课表数据
         handleLearningLessonsChanges(recordDTO);
+        // 4.发送消息到队列
+        rabbitMqHelper.send(MqConstants.Exchange.LEARNING_EXCHANGE, MqConstants.Key.LEARN_SECTION, userId);
+
     }
 
     /**
