@@ -3,7 +3,6 @@ package com.tianji.learning.service.impl;
 import com.tianji.common.autoconfigure.mq.RabbitMqHelper;
 import com.tianji.common.constants.MqConstants;
 import com.tianji.common.exceptions.BizIllegalException;
-import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.learning.constants.RedisConstants;
@@ -12,7 +11,6 @@ import com.tianji.learning.mq.message.SignInMessage;
 import com.tianji.learning.service.ISignRecordService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -81,39 +79,25 @@ public class SignRecordServiceImpl implements ISignRecordService {
         String key = RedisConstants.SIGN_RECORD_KEY_PREFIX
                 + userId
                 + today.format(DateUtils.SIGN_DATE_SUFFIX_FORMATTER);
-        // 4.查询签到记录
-        List<Long> signRecord = stringRedisTemplate.opsForValue().bitField(
-                key,
-                BitFieldSubCommands.create()
-                        .get(BitFieldSubCommands.BitFieldType.unsigned(today.getDayOfMonth()))
-                        .valueAt(0));
-        if (CollUtils.isEmpty(signRecord)) {
-            return List.of();
+        // 4.查询签到记录：从1号到今天的签到状态，正序返回（result[0]=1号）
+        List<Long> result = new ArrayList<>(today.getDayOfMonth());
+        for (int i = 0; i < today.getDayOfMonth(); i++) {
+            Boolean signed = stringRedisTemplate.opsForValue().getBit(key, i);
+            result.add(Boolean.TRUE.equals(signed) ? 1L : 0L);
         }
-        int num = signRecord.get(0).intValue();
-        List<Long> result = new ArrayList<>();
-        while (num>0) {
-            result.add(num&1L);
-            num >>>= 1;
-        }
-
         return result;
     }
 
     private int getContinueSignDays(String key, int dayOfMonth) {
-        List<Long> result = stringRedisTemplate.opsForValue().bitField(
-                key,
-                BitFieldSubCommands.create()
-                        .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth))
-                        .valueAt(0));
-        if (CollUtils.isEmpty(result)) {
-            return 0;
-        }
-        int num = result.get(0).intValue();
+        // 从今天(最后一位)往回数连续签到天数
         int count = 0;
-        while ((num & 1) == 1) {
-            count++;
-            num >>>= 1;
+        for (int i = dayOfMonth - 1; i >= 0; i--) {
+            Boolean signed = stringRedisTemplate.opsForValue().getBit(key, i);
+            if (Boolean.TRUE.equals(signed)) {
+                count++;
+            } else {
+                break;
+            }
         }
         return count;
     }
