@@ -3,6 +3,7 @@ package com.tianji.learning.service.impl;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
+import com.tianji.api.client.remark.RemarkClient;
 import com.tianji.api.client.user.UserClient;
 import com.tianji.api.dto.user.UserDTO;
 import com.tianji.common.autoconfigure.mq.RabbitMqHelper;
@@ -55,6 +56,7 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
     private IInteractionQuestionService questionService;
     private final UserClient userClient;
     private final RabbitMqHelper rabbitMqHelper;
+    private final RemarkClient remarkClient;
 
     @Override
     @Transactional
@@ -141,6 +143,8 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
         List<UserDTO> users = userClient.queryUserByIds(userIds);
         Map<Long, UserDTO> userMap = users == null ? new HashMap<>() :
                 users.stream().collect(Collectors.toMap(UserDTO::getId, Function.identity()));
+        // 5.1.批量查询当前登录用户是否点过赞（bizId就是回答/评论id）
+        Set<Long> likedBizIds = remarkClient.isBizLiked(records.stream().map(InteractionReply::getId).collect(Collectors.toList()));
         // 6.转VO：匿名脱敏 + 补昵称头像 + 评论补targetUserName
         List<ReplyVO> vos = new ArrayList<>(records.size());
         for (InteractionReply reply : records) {
@@ -165,6 +169,8 @@ public class InteractionReplyServiceImpl extends ServiceImpl<InteractionReplyMap
                     vo.setTargetUserName(t.getName());
                 }
             }
+            // 补点赞状态（当前登录用户是否点过赞）
+            vo.setLiked(likedBizIds != null && likedBizIds.contains(reply.getId()));
             // 每条记录都要进列表，只add一次（匿名的也展示，只是没身份）
             vos.add(vo);
         }
