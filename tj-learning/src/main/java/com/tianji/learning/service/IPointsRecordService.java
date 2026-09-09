@@ -1,7 +1,10 @@
 package com.tianji.learning.service;
 
+import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.learning.domain.enums.PointsRecordType;
 import com.tianji.learning.domain.po.PointsRecord;
+import com.tianji.learning.domain.query.PointsRecordQuery;
+import com.tianji.learning.domain.vo.PointsRecordVO;
 import com.tianji.learning.domain.vo.PointsStatisticsVO;
 import com.baomidou.mybatisplus.extension.service.IService;
 
@@ -23,4 +26,9 @@ public interface IPointsRecordService extends IService<PointsRecord> {
      * 查询当前用户今日获取的积分统计
      */
     List<PointsStatisticsVO> queryMyTodayPoints();
+
+    /**
+     * 分页查询当前用户积分明细
+     */
+    PageDTO<PointsRecordVO> queryMyPoints(PointsRecordQuery query);
 }

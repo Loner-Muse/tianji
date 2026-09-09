@@ -1,12 +1,17 @@
 package com.tianji.learning.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.tianji.common.domain.dto.PageDTO;
+import com.tianji.common.utils.BeanUtils;
 import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.learning.domain.enums.PointsRecordType;
 import com.tianji.learning.domain.po.PointsRecord;
+import com.tianji.learning.domain.query.PointsRecordQuery;
+import com.tianji.learning.domain.vo.PointsRecordVO;
 import com.tianji.learning.domain.vo.PointsStatisticsVO;
 import com.tianji.learning.mapper.PointsRecordMapper;
 import com.tianji.learning.service.IPointsRecordService;
@@ -99,5 +104,32 @@ public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, Poi
             vos.add(vo);
         });
         return vos;
+    }
+
+    @Override
+    public PageDTO<PointsRecordVO> queryMyPoints(PointsRecordQuery query) {
+        // 1.获取当前用户
+        Long userId = UserContext.getUser();
+        // 2.构造查询条件
+        QueryWrapper<PointsRecord> wrapper = new QueryWrapper<>();
+        wrapper.lambda()
+                .eq(PointsRecord::getUserId, userId)
+                .eq(query.getType() != null, PointsRecord::getType, query.getType())
+                .orderByDesc(PointsRecord::getCreateTime);
+        // 3.分页查询
+        Page<PointsRecord> page = page(query.toMpPage(), wrapper);
+        List<PointsRecord> records = page.getRecords();
+        if (CollUtils.isEmpty(records)) {
+            return PageDTO.empty(page);
+        }
+        // 4.封装VO
+        List<PointsRecordVO> vos = new ArrayList<>(records.size());
+        for (PointsRecord record : records) {
+            PointsRecordVO vo = BeanUtils.copyProperties(record, PointsRecordVO.class);
+            PointsRecordType type = PointsRecordType.of(record.getType());
+            vo.setType(type == null ? null : type.getDesc());
+            vos.add(vo);
+        }
+        return PageDTO.of(page, vos);
     }
 }
