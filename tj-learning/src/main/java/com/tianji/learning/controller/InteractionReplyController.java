@@ -20,15 +20,15 @@ import javax.validation.Valid;
  * @since 2026-09-03
  */
 @RestController
-@RequestMapping("/interaction-reply")
+@RequestMapping("/replies")
 @RequiredArgsConstructor
 public class InteractionReplyController {
     private final IInteractionReplyService replyService;
-    @PostMapping("/replies")
+    @PostMapping
     public void saveReply(@Valid @RequestBody ReplyDTO replyFormDTO) {
         replyService.saveReply(replyFormDTO);
     }
-    @GetMapping("/replies/page")
+    @GetMapping("page")
     public PageDTO<ReplyVO> getReplyPage(ReplyPageQuery replyPageQuery) {
         return replyService.getReplyPage(replyPageQuery);
     }

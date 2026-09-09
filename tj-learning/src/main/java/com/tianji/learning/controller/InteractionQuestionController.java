@@ -23,7 +23,7 @@ import javax.validation.Valid;
  */
 @RequiredArgsConstructor
 @RestController
-@RequestMapping("/interaction-question")
+@RequestMapping("/questions")
 public class InteractionQuestionController {
     private final IInteractionQuestionService questionService;
     @ApiOperation("新增提问")
