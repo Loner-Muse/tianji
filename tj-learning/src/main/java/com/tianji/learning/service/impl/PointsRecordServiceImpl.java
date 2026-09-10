@@ -8,6 +8,7 @@ import com.tianji.common.utils.BeanUtils;
 import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
+import com.tianji.learning.constants.RedisConstants;
 import com.tianji.learning.domain.enums.PointsRecordType;
 import com.tianji.learning.domain.po.PointsRecord;
 import com.tianji.learning.domain.query.PointsRecordQuery;
@@ -15,6 +16,8 @@ import com.tianji.learning.domain.vo.PointsRecordVO;
 import com.tianji.learning.domain.vo.PointsStatisticsVO;
 import com.tianji.learning.mapper.PointsRecordMapper;
 import com.tianji.learning.service.IPointsRecordService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -32,13 +35,18 @@ import java.util.stream.Collectors;
  * @since 2026-09-08
  */
 @Service
+@RequiredArgsConstructor
 public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, PointsRecord> implements IPointsRecordService {
+
+    private final StringRedisTemplate redisTemplate;
 
     @Override
     public void addPointsRecord(Long userId, int points, PointsRecordType pointsRecordType) {
         //获取当前时间
         LocalDateTime now = LocalDateTime.now();
         int maxPoints = pointsRecordType.getMaxPoints();
+        // 1.判断当前方式有没有积分上限
+        int realPoints = points;
 
         LocalDateTime begin = DateUtils.getDayStartTime(now);
         LocalDateTime end = DateUtils.getDayEndTime(now);
@@ -51,14 +59,20 @@ public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, Poi
             if (currentPoints  >= maxPoints) {
                 return;
             }
-            
+            // 没超过上限，但本次加分可能超上限，则截断到上限
+            if (currentPoints + points > maxPoints) {
+                realPoints = maxPoints - currentPoints;
+            }
         }
         // 3.没有，直接保存积分记录
         PointsRecord p = new PointsRecord();
-        p.setPoints(points);
+        p.setPoints(realPoints);
         p.setUserId(userId);
         p.setType(pointsRecordType.getValue());
         save(p);
+        // 4.累加总积分到Redis(实时榜单),以赛季月份为key,用户id为member,积分为score
+        String key = RedisConstants.POINTS_BOARD_KEY_PREFIX + now.format(DateUtils.POINTS_BOARD_SUFFIX_FORMATTER);
+        redisTemplate.opsForZSet().incrementScore(key, userId.toString(), realPoints);
     }
 
     private Integer GetpointByData(Long userId, PointsRecordType pointsRecordType, LocalDateTime begin, LocalDateTime end) {
@@ -98,7 +112,7 @@ public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, Poi
                 return;
             }
             PointsStatisticsVO vo = new PointsStatisticsVO();
-            vo.setType(recordType.getDesc());
+            vo.setType(PointsStatisticsVO.PointsRecordTypeVO.of(recordType.getValue(), recordType.getDesc()));
             vo.setPoints(list.stream().map(PointsRecord::getPoints).reduce(0, Integer::sum));
             vo.setMaxPoints(recordType.getMaxPoints());
             vos.add(vo);
