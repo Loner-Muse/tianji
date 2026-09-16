@@ -6,6 +6,7 @@ import com.tianji.common.exceptions.BizIllegalException;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.learning.constants.RedisConstants;
+import com.tianji.learning.domain.vo.SignRecordVO;
 import com.tianji.learning.domain.vo.SignResultVO;
 import com.tianji.learning.mq.message.SignInMessage;
 import com.tianji.learning.service.ISignRecordService;
@@ -71,7 +72,7 @@ public class SignRecordServiceImpl implements ISignRecordService {
     }
 
     @Override
-    public List<Long> getSignRecord() {
+    public SignRecordVO getSignRecord() {
         Long userId = UserContext.getUser();
         // 2.获取当前日期
         LocalDate today = LocalDate.now();
@@ -80,12 +81,16 @@ public class SignRecordServiceImpl implements ISignRecordService {
                 + userId
                 + today.format(DateUtils.SIGN_DATE_SUFFIX_FORMATTER);
         // 4.查询签到记录：从1号到今天的签到状态，正序返回（result[0]=1号）
-        List<Long> result = new ArrayList<>(today.getDayOfMonth());
+        List<Integer> records = new ArrayList<>(today.getDayOfMonth());
         for (int i = 0; i < today.getDayOfMonth(); i++) {
             Boolean signed = stringRedisTemplate.opsForValue().getBit(key, i);
-            result.add(Boolean.TRUE.equals(signed) ? 1L : 0L);
+            records.add(Boolean.TRUE.equals(signed) ? 1 : 0);
         }
-        return result;
+        // 5.封装返回：连续签到天数 + 本月签到记录
+        SignRecordVO vo = new SignRecordVO();
+        vo.setSignDays(getContinueSignDays(key, today.getDayOfMonth()));
+        vo.setSignRecords(records.stream().map(Integer::byteValue).collect(java.util.stream.Collectors.toList()));
+        return vo;
     }
 
     private int getContinueSignDays(String key, int dayOfMonth) {

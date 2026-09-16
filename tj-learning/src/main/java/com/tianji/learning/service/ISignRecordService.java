@@ -1,11 +1,10 @@
 package com.tianji.learning.service;
 
+import com.tianji.learning.domain.vo.SignRecordVO;
 import com.tianji.learning.domain.vo.SignResultVO;
-
-import java.util.List;
 
 public interface ISignRecordService {
     SignResultVO signRecord();
 
-    List<Long> getSignRecord();
+    SignRecordVO getSignRecord();
 }

@@ -11,6 +11,22 @@ public class PointsBoardItemVO {
     private Integer points;
     @ApiModelProperty("名次")
     private Integer rank;
-    @ApiModelProperty("学生姓名")
-    private String name;
+    @ApiModelProperty("学生信息")
+    private StudentVO student;
+
+    @Data
+    @ApiModel(description = "学生信息")
+    public static class StudentVO {
+        @ApiModelProperty("学生姓名")
+        private String name;
+        @ApiModelProperty("学生头像")
+        private String icon;
+
+        public static StudentVO of(String name, String icon) {
+            StudentVO vo = new StudentVO();
+            vo.setName(name);
+            vo.setIcon(icon);
+            return vo;
+        }
+    }
 }

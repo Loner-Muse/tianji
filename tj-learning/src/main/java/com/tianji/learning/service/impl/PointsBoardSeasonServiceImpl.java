@@ -8,6 +8,7 @@ import com.tianji.learning.service.IPointsBoardSeasonService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -29,5 +30,13 @@ public class PointsBoardSeasonServiceImpl extends ServiceImpl<PointsBoardSeasonM
                 .list();
         // 2.转VO返回
         return BeanUtils.copyList(list, PointsBoardSeasonVO.class);
+    }
+
+    @Override
+    public Integer querySeasonByTime(LocalDateTime time) {
+        return lambdaQuery()
+                .le(PointsBoardSeason::getBeginTime, time)
+                .ge(PointsBoardSeason::getEndTime, time)
+                .oneOpt().map(PointsBoardSeason::getId).orElse(null);
     }
 }

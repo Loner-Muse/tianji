@@ -5,9 +5,9 @@ import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.learning.domain.query.PointsRecordQuery;
 import com.tianji.learning.domain.vo.PointsRecordVO;
 import com.tianji.learning.domain.vo.PointsStatisticsVO;
-import com.tianji.learning.domain.vo.SignResultVO;
 import com.tianji.learning.service.IPointsRecordService;
-import com.tianji.learning.service.ISignRecordService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,15 +27,16 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/points")
+@Api(tags = "积分相关接口")
 @RequiredArgsConstructor
 public class PointsRecordController {
 
     private final IPointsRecordService pointsRecordService;
-    private final ISignRecordService signRecordService;
 
     /**
      * 查询今日积分统计
      */
+    @ApiOperation("查询今日积分统计")
     @GetMapping("/today")
     public List<PointsStatisticsVO> queryMyTodayPoints() {
         return pointsRecordService.queryMyTodayPoints();
@@ -44,24 +45,10 @@ public class PointsRecordController {
     /**
      * 分页查询我的积分明细
      */
+    @ApiOperation("分页查询我的积分明细")
     @GetMapping("/list")
     public PageDTO<PointsRecordVO> queryMyPoints(PointsRecordQuery query) {
         return pointsRecordService.queryMyPoints(query);
     }
 
-    /**
-     * 签到
-     */
-    @PostMapping("/sign-record")
-    public SignResultVO signRecord() {
-        return signRecordService.signRecord();
-    }
-
-    /**
-     * 查询签到记录
-     */
-    @GetMapping("/sign-record")
-    public List<Long> getSignRecord() {
-        return signRecordService.getSignRecord();
-    }
 }

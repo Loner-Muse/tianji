@@ -8,10 +8,12 @@ import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.learning.constants.RedisConstants;
 import com.tianji.learning.domain.po.PointsBoard;
+import com.tianji.learning.domain.query.PointsBoardQuery;
 import com.tianji.learning.domain.vo.PointsBoardItemVO;
 import com.tianji.learning.domain.vo.PointsBoardVO;
 import com.tianji.learning.mapper.PointsBoardMapper;
 import com.tianji.learning.service.IPointsBoardService;
+import com.tianji.learning.utils.TableInfoContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.BoundZSetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -25,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static com.tianji.learning.constants.LearningConstants.POINTS_BOARD_TABLE_PREFIX;
 
 /**
  * <p>
@@ -43,24 +47,26 @@ public class PointsBoardServiceImpl extends ServiceImpl<PointsBoardMapper, Point
     private final UserClient userClient;
 
     @Override
-    public PointsBoardVO queryPointsBoard(Integer season) {
+    public PointsBoardVO queryPointsBoard(PointsBoardQuery query) {
         Long userId = UserContext.getUser();
         // 1.确定赛季：null或0代表当前赛季
+        Long season = query.getSeason();
         boolean isCurrent = season == null || season == 0;
-        // 2.当前赛季从Redis实时榜单查询,历史赛季查points_board赛季表
-        LocalDateTime now = LocalDateTime.now();
-        String key = RedisConstants.POINTS_BOARD_KEY_PREFIX + now.format(DateUtils.POINTS_BOARD_SUFFIX_FORMATTER);
-
-        // 2.1.我的积分和排名
-        PointsBoard myBoard = isCurrent
-                ? queryMyCurrentBoard(key)
-                : lambdaQuery().eq(PointsBoard::getSeason, season)
-                        .eq(PointsBoard::getUserId, userId).one();
-        // 2.2.榜单列表
-        List<PointsBoard> list = isCurrent
-                ? queryCurrentBoardList(key, 1, 100)
-                : lambdaQuery().eq(PointsBoard::getSeason, season)
-                        .orderByAsc(PointsBoard::getRank).last("limit 100").list();
+        // 2.查询我的积分和排名、榜单列表
+        PointsBoard myBoard;
+        List<PointsBoard> list;
+        if (isCurrent) {
+            // 2.1.当前赛季：从 Redis 实时榜单查询
+            LocalDateTime now = LocalDateTime.now();
+            String key = RedisConstants.POINTS_BOARD_KEY_PREFIX
+                    + now.format(DateUtils.POINTS_BOARD_SUFFIX_FORMATTER);
+            myBoard = queryMyCurrentBoard(key);
+            list = queryCurrentBoardList(key, query.getPageNo(), query.getPageSize());
+        } else {
+            // 2.2.历史赛季：从 points_board_{赛季id} 分表查询
+            myBoard = queryMyHistoryBoard(season.intValue(), userId);
+            list = queryHistoryBoardList(season.intValue(), query.getPageNo(), query.getPageSize());
+        }
 
         // 3.组装VO
         PointsBoardVO vo = new PointsBoardVO();
@@ -115,6 +121,65 @@ public class PointsBoardServiceImpl extends ServiceImpl<PointsBoardMapper, Point
     }
 
     /**
+     * 从历史赛季分表中查询当前用户的积分和排名
+     * <p>
+     * 分表方案下没有 rank 字段，名次就是 id
+     *
+     * @param season 赛季id
+     * @param userId 用户id
+     * @return 我的积分排名信息，未上榜返回 null
+     */
+    private PointsBoard queryMyHistoryBoard(Integer season, Long userId) {
+        // 1.计算动态表名并放入 ThreadLocal，供动态表名插件替换
+        TableInfoContext.setInfo(POINTS_BOARD_TABLE_PREFIX + season);
+        try {
+            // 2.查询我的榜单记录
+            PointsBoard p = lambdaQuery()
+                    .eq(PointsBoard::getUserId, userId)
+                    .one();
+            if (p == null) {
+                return null;
+            }
+            // 3.名次取 id
+            p.setRank(p.getId() == null ? 0 : p.getId().intValue());
+            return p;
+        } finally {
+            // 4.清理 ThreadLocal
+            TableInfoContext.remove();
+        }
+    }
+
+    /**
+     * 从历史赛季分表中分页查询榜单数据（按名次即 id 升序）
+     *
+     * @param season   赛季id
+     * @param pageNo   页码
+     * @param pageSize 页大小
+     * @return 榜单数据
+     */
+    private List<PointsBoard> queryHistoryBoardList(Integer season, int pageNo, int pageSize) {
+        // 1.计算动态表名并放入 ThreadLocal
+        TableInfoContext.setInfo(POINTS_BOARD_TABLE_PREFIX + season);
+        try {
+            // 2.按名次（id）升序分页查询
+            int from = (pageNo - 1) * pageSize;
+            List<PointsBoard> list = lambdaQuery()
+                    .orderByAsc(PointsBoard::getId)
+                    .last("limit " + from + "," + pageSize)
+                    .list();
+            if (CollUtils.isEmpty(list)) {
+                return CollUtils.emptyList();
+            }
+            // 3.名次取 id
+            list.forEach(b -> b.setRank(b.getId() == null ? 0 : b.getId().intValue()));
+            return list;
+        } finally {
+            // 4.清理 ThreadLocal
+            TableInfoContext.remove();
+        }
+    }
+
+    /**
      * 从Redis实时榜单中分页查询榜单数据(积分降序)
      *
      * @param key      当前赛季榜单key
@@ -122,7 +187,8 @@ public class PointsBoardServiceImpl extends ServiceImpl<PointsBoardMapper, Point
      * @param pageSize 页大小
      * @return 榜单数据
      */
-    private List<PointsBoard> queryCurrentBoardList(String key, int pageNo, int pageSize) {
+    @Override
+    public List<PointsBoard> queryCurrentBoardList(String key, int pageNo, int pageSize) {
         // 1.计算分页起始位置
         int from = (pageNo - 1) * pageSize;
         // 2.降序查询当前页数据
@@ -170,5 +236,9 @@ public class PointsBoardServiceImpl extends ServiceImpl<PointsBoardMapper, Point
                 b.setIcon(u.getIcon());
             }
         }
+    }
+    @Override
+    public void createPointsBoardTableBySeason(Integer season) {
+        getBaseMapper().createPointsBoardTable(POINTS_BOARD_TABLE_PREFIX + season);
     }
 }
