@@ -4,7 +4,9 @@ package com.tianji.common.autoconfigure.mybatis;
 import com.baomidou.mybatisplus.annotation.DbType;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.DynamicTableNameInnerInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -26,8 +28,14 @@ public class MybatisConfig {
 
     @Bean
     @ConditionalOnMissingBean
-    public MybatisPlusInterceptor mybatisPlusInterceptor() {
+    public MybatisPlusInterceptor mybatisPlusInterceptor(
+            @Autowired(required = false) DynamicTableNameInnerInterceptor dynamicTableNameInnerInterceptor) {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        // 动态表名插件：不是每个微服务都用到，所以注入时允许为空
+        // 注意：MyBatis-Plus 的插件顺序很重要，动态表名必须排在分页插件之前
+        if (dynamicTableNameInnerInterceptor != null) {
+            interceptor.addInnerInterceptor(dynamicTableNameInnerInterceptor);
+        }
         PaginationInnerInterceptor paginationInnerInterceptor = new PaginationInnerInterceptor(DbType.MYSQL);
         paginationInnerInterceptor.setMaxLimit(200L);
         interceptor.addInnerInterceptor(paginationInnerInterceptor);
