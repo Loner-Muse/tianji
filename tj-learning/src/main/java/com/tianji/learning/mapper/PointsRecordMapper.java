@@ -25,4 +25,11 @@ public interface PointsRecordMapper extends BaseMapper<PointsRecord> {
 
     @Select("SELECT SUM(points) FROM points_record ${ew.customSqlSegment}")
     Integer queryUserPointsByTypeAndDate(@Param(Constants.WRAPPER) QueryWrapper<PointsRecord> wrapper);
+
+    /**
+     * 为指定赛季创建积分明细表，表名由调用方计算传入（points_record_{赛季id}）
+     *
+     * @param tableName 目标表名
+     */
+    void createPointsRecordTable(@Param("tableName") String tableName);
 }

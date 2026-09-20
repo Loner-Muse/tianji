@@ -4,8 +4,10 @@ import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.DateUtils;
 import com.tianji.learning.constants.RedisConstants;
 import com.tianji.learning.domain.po.PointsBoard;
+import com.tianji.learning.domain.po.PointsBoardSeason;
 import com.tianji.learning.service.IPointsBoardSeasonService;
 import com.tianji.learning.service.IPointsBoardService;
+import com.tianji.learning.service.IPointsRecordService;
 import com.tianji.learning.utils.TableInfoContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,13 +19,15 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.tianji.learning.constants.LearningConstants.POINTS_BOARD_TABLE_PREFIX;
+import static com.tianji.learning.constants.LearningConstants.POINTS_RECORD_TABLE_PREFIX;
 
 /**
  * <p>
- * 学霸天梯榜 历史榜单持久化任务
+ * 学霸天梯榜 历史数据持久化任务
  * </p>
- * 三个任务按「创建表 -> 持久化 -> 清理缓存」顺序执行，
- * 这里用错开的 cron 表达式保证先后顺序（改用 XXL-JOB 后可换成子任务链）。
+ * 五个任务按「建表 -> 持久化/迁移 -> 清理缓存」顺序执行，用错开的 cron 表达式保证先后顺序：
+ * 03:00 建榜单表、03:10 建积分明细表、03:30 榜单持久化、03:40 积分明细迁移、04:00 清理 Redis。
+ * 改用 XXL-JOB 后可换成子任务链。
  */
 @Slf4j
 @Component
@@ -33,6 +37,8 @@ public class PointsBoardPersistentHandler {
     private final IPointsBoardSeasonService seasonService;
 
     private final IPointsBoardService pointsBoardService;
+
+    private final IPointsRecordService pointsRecordService;
 
     private final StringRedisTemplate redisTemplate;
 
@@ -55,7 +61,25 @@ public class PointsBoardPersistentHandler {
     }
 
     /**
-     * 2.每月1号凌晨3点30：把上赛季 Redis 榜单持久化到数据库
+     * 2.每月1号凌晨3点10：为上赛季创建积分明细表 points_record_{赛季id}
+     */
+    @Scheduled(cron = "0 10 3 1 * ?")
+    public void createPointsRecordTableOfLastSeason() {
+        // 1.获取上月时间
+        LocalDateTime time = LocalDateTime.now().minusMonths(1);
+        // 2.查询上赛季id
+        Integer season = seasonService.querySeasonByTime(time);
+        if (season == null) {
+            log.warn("上月[{}]没有对应赛季，跳过积分明细建表", time);
+            return;
+        }
+        // 3.创建表
+        pointsRecordService.createPointsRecordTableBySeason(season);
+        log.info("赛季[{}]积分明细表创建完成：{}", season, POINTS_RECORD_TABLE_PREFIX + season);
+    }
+
+    /**
+     * 3.每月1号凌晨3点30：把上赛季 Redis 榜单持久化到数据库
      */
     @Scheduled(cron = "0 30 3 1 * ?")
     public void savePointsBoard2DB() {
@@ -101,7 +125,38 @@ public class PointsBoardPersistentHandler {
     }
 
     /**
-     * 3.每月1号凌晨4点：清理 Redis 中上赛季榜单，释放内存
+     * 4.每月1号凌晨3点40：把上赛季的积分明细从 points_record 迁移到 points_record_{赛季id}
+     * <p>
+     * 迁移区间取赛季表里的起止日期，左闭右开。
+     * 具体迁移逻辑（取数 -> 写入分表 -> 删除原表）由 service 内部完成。
+     */
+    @Scheduled(cron = "0 40 3 1 * ?")
+    public void migratePointsRecordOfLastSeason() {
+        // 1.获取上月时间
+        LocalDateTime time = LocalDateTime.now().minusMonths(1);
+        // 2.查询上赛季id
+        Integer season = seasonService.querySeasonByTime(time);
+        if (season == null) {
+            log.warn("上月[{}]没有对应赛季，跳过积分明细迁移", time);
+            return;
+        }
+        // 3.查出赛季信息，拿到起止日期
+        PointsBoardSeason seasonInfo = seasonService.getById(season);
+        if (seasonInfo == null || seasonInfo.getBeginTime() == null || seasonInfo.getEndTime() == null) {
+            log.warn("赛季[{}]的起止时间不完整，跳过积分明细迁移", season);
+            return;
+        }
+        // 4.左闭右开区间：begin <= create_time < end，
+        //   用 endTime+1 天的零点作为右边界，避免 23:59:59 的精度问题
+        LocalDateTime begin = seasonInfo.getBeginTime().atStartOfDay();
+        LocalDateTime end = seasonInfo.getEndTime().plusDays(1).atStartOfDay();
+        // 5.迁移
+        int total = pointsRecordService.migratePointsRecordBySeason(season, begin, end);
+        log.info("赛季[{}]积分明细迁移完成，共 {} 条", season, total);
+    }
+
+    /**
+     * 5.每月1号凌晨4点：清理 Redis 中上赛季榜单，释放内存
      */
     @Scheduled(cron = "0 0 4 1 * ?")
     public void clearPointsBoardFromRedis() {

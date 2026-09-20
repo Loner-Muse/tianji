@@ -16,6 +16,7 @@ import com.tianji.learning.domain.vo.PointsRecordVO;
 import com.tianji.learning.domain.vo.PointsStatisticsVO;
 import com.tianji.learning.mapper.PointsRecordMapper;
 import com.tianji.learning.service.IPointsRecordService;
+import com.tianji.learning.utils.TableInfoContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import static com.tianji.learning.constants.LearningConstants.POINTS_RECORD_TABLE_PREFIX;
 
 /**
  * <p>
@@ -37,6 +40,11 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, PointsRecord> implements IPointsRecordService {
+
+    /**
+     * 单次迁移的批大小
+     */
+    private static final int MIGRATE_BATCH_SIZE = 1000;
 
     private final StringRedisTemplate redisTemplate;
 
@@ -145,5 +153,46 @@ public class PointsRecordServiceImpl extends ServiceImpl<PointsRecordMapper, Poi
             vos.add(vo);
         }
         return PageDTO.of(page, vos);
+    }
+
+    @Override
+    public void createPointsRecordTableBySeason(Integer season) {
+        getBaseMapper().createPointsRecordTable(POINTS_RECORD_TABLE_PREFIX + season);
+    }
+
+    @Override
+    public int migratePointsRecordBySeason(Integer season, LocalDateTime begin, LocalDateTime end) {
+        String tableName = POINTS_RECORD_TABLE_PREFIX + season;
+        int total = 0;
+        while (true) {
+            // 1.查询原表 points_record 中本区间的记录。
+            //   这里每次固定取"从第一条开始的 N 条"，而不是 pageNo 递增：
+            //   因为第 3 步会删掉已迁移的数据，后面的记录会往前补位，
+            //   如果页码递增就会直接跳过数据，导致只迁了一半。
+            //   先 remove 一次，确保本次查询走原表而不是残留的分表。
+            TableInfoContext.remove();
+            List<PointsRecord> list = lambdaQuery()
+                    .ge(PointsRecord::getCreateTime, begin)
+                    .lt(PointsRecord::getCreateTime, end)
+                    .orderByAsc(PointsRecord::getId)
+                    .last("limit " + MIGRATE_BATCH_SIZE)
+                    .list();
+            if (CollUtils.isEmpty(list)) {
+                break;
+            }
+            // 2.写入历史分表：设置动态表名后，saveBatch 生成的 insert 会被替换到 points_record_{赛季id}
+            TableInfoContext.setInfo(tableName);
+            try {
+                saveBatch(list);
+            } finally {
+                // 务必清理，否则后面的删除操作也会打到分表上
+                TableInfoContext.remove();
+            }
+            // 3.删除原表已迁移的记录，避免重复迁移
+            List<Long> ids = list.stream().map(PointsRecord::getId).collect(Collectors.toList());
+            removeByIds(ids);
+            total += list.size();
+        }
+        return total;
     }
 }
