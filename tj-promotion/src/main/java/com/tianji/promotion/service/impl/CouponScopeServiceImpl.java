@@ -1,5 +1,6 @@
 package com.tianji.promotion.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.tianji.promotion.domain.po.CouponScope;
 import com.tianji.promotion.mapper.CouponScopeMapper;
 import com.tianji.promotion.service.ICouponScopeService;
@@ -17,4 +18,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class CouponScopeServiceImpl extends ServiceImpl<CouponScopeMapper, CouponScope> implements ICouponScopeService {
 
+    @Override
+    public void removeByCouponId(Long couponId) {
+        baseMapper.delete(new LambdaQueryWrapper<CouponScope>().eq(CouponScope::getCouponId, couponId));
+    }
 }
