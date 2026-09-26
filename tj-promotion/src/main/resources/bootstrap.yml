@@ -40,3 +40,5 @@ tj:
   auth:
     resource:
       enable: true # 开启登录拦截的功能
+      excludeLoginPaths: # 无需登录即可访问的路径（放行）
+        - /coupons/list

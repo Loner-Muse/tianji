@@ -8,8 +8,10 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.tianji.promotion.domain.query.CouponQuery;
 import com.tianji.promotion.domain.vo.CouponDetailVO;
 import com.tianji.promotion.domain.vo.CouponPageVO;
+import com.tianji.promotion.domain.vo.CouponVO;
 
 import javax.validation.Valid;
+import java.util.List;
 
 /**
  * <p>
@@ -44,4 +46,16 @@ public interface ICouponService extends IService<Coupon> {
      * 暂停发放优惠券（只有「发放中」的券可以暂停）
      */
     void pauseIssue(Long id);
+
+    /**
+     * 定时开始发放：把到达发放开始时间的「未开始」券改成「发放中」
+     */
+    void beginIssueBatch();
+
+    /**
+     * 定时结束发放：把到达发放结束时间的「发放中」券改成「发放结束」
+     */
+    void endIssueBatch();
+
+    List<CouponVO> queryIssuingCoupons();
 }
