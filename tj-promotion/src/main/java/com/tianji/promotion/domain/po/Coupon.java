@@ -3,6 +3,7 @@ package com.tianji.promotion.domain.po;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.tianji.promotion.enums.CouponStatus;
 import com.tianji.promotion.enums.DiscountType;
 import com.tianji.promotion.enums.ObtainType;
@@ -36,6 +37,7 @@ public class Coupon implements Serializable {
     private Long id;
 
     @ApiModelProperty(value = "优惠券名称，可以和活动名称保持一致")
+    @TableField("`name`")
     private String name;
 
     @ApiModelProperty(value = "优惠券类型，1：普通券。目前就一种，保留字段")
@@ -45,6 +47,7 @@ public class Coupon implements Serializable {
     private DiscountType discountType;
 
     @ApiModelProperty(value = "是否限定作用范围，false：不限定，true：限定。默认false")
+    @TableField("`specific`")
     private Boolean specific;
 
     @ApiModelProperty(value = "折扣值，如果是满减则存满减金额，如果是折扣，则存折扣率，8折就是存80")
