@@ -1,9 +1,12 @@
 package com.tianji.promotion.service.impl;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.common.exceptions.BadRequestException;
 import com.tianji.common.exceptions.BizIllegalException;
+import com.tianji.common.utils.BeanUtils;
+import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.promotion.domain.po.Coupon;
 import com.tianji.promotion.domain.po.ExchangeCode;
@@ -24,6 +27,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * <p>
@@ -121,11 +129,52 @@ public class UserCouponServiceImpl extends ServiceImpl<UserCouponMapper, UserCou
 
     /**
      * 分页查询我的优惠券
+     * <p>
+     * 要查两张表：user_coupon 回答"我有哪些券、各自什么时候过期"，
+     * coupon 回答"这些券长什么样（名称、折扣规则）"。
      */
     @Override
     public PageDTO<CouponVO> queryMyCouponPage(UserCouponQuery query) {
-        // TODO 练习 4.1
-        return null;
+        // 1.分页查询当前用户的券，按领取时间倒序
+        //    不加排序时 MySQL 不保证返回顺序，翻页会出现记录重复或丢失
+        Page<UserCoupon> page = lambdaQuery()
+                .eq(UserCoupon::getUserId, UserContext.getUser())
+                .eq(query.getStatus() != null, UserCoupon::getStatus, query.getStatus())
+                .page(query.toMpPageDefaultSortByCreateTimeDesc());
+        List<UserCoupon> records = page.getRecords();
+        if (CollUtils.isEmpty(records)) {
+            return PageDTO.empty(page);
+        }
+        // 2.批量查出关联的 coupon 信息
+        //    先 distinct：同一个 couponId 会在 records 里出现多次（限领多张），
+        //    IN 里塞重复 id 没有意义
+        List<Long> couponIds = records.stream()
+                .map(UserCoupon::getCouponId)
+                .distinct()
+                .collect(Collectors.toList());
+        List<Coupon> coupons = couponMapper.selectBatchIds(couponIds);
+        if (CollUtils.isEmpty(coupons)) {
+            return PageDTO.empty(page);
+        }
+        // 3.转成 Map 供下面按 couponId 取用
+        //    这里的 key 天然唯一（coupon 主键），不会出现重复 key 异常
+        Map<Long, Coupon> couponMap = coupons.stream()
+                .collect(Collectors.toMap(Coupon::getId, Function.identity()));
+        // 4.★ 必须以 records 驱动循环：列表有几行由「用户券」决定，
+        //    同一张 coupon 可能对应多行，用 coupons 循环会丢掉重复的那些券
+        List<CouponVO> vos = new ArrayList<>(records.size());
+        for (UserCoupon uc : records) {
+            Coupon coupon = couponMap.get(uc.getCouponId());
+            if (coupon == null) {
+                continue;
+            }
+            CouponVO vo = BeanUtils.copyBean(coupon, CouponVO.class);
+            // 过期时间取「用户券」上的：分次领取的券有效期各不相同，
+            // 而"按天数"的券在 coupon 表里这个字段本来就是空的
+            vo.setTermEndTime(uc.getTermEndTime());
+            vos.add(vo);
+        }
+        return PageDTO.of(page, vos);
     }
 
     /**

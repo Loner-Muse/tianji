@@ -278,45 +278,55 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
     @Override
     public List<CouponVO> queryIssuingCoupons() {
         // 1.查询发放中且为手动领取的优惠券
-        List<Coupon> coupons = lambdaQuery().eq(Coupon::getStatus, CouponStatus.ISSUING)
+        List<Coupon> coupons = lambdaQuery()
+                .eq(Coupon::getStatus, CouponStatus.ISSUING)
                 .eq(Coupon::getObtainWay, ObtainType.PUBLIC)
                 .list();
         if (CollUtils.isEmpty(coupons)) {
             return Collections.emptyList();
         }
-        //获取优惠卷id
+        // 2.查询当前用户对这些券的领取记录
         List<Long> couponIds = coupons.stream()
                 .map(Coupon::getId)
                 .collect(Collectors.toList());
-        if (CollUtils.isEmpty(couponIds)) {
-            return Collections.emptyList();
-        }
-        // 2.根据优惠卷id，和用户id，查询用户端优惠券详情
-        List<UserCoupon> userCoupons = userCouponService.lambdaQuery().eq(UserCoupon::getUserId, UserContext.getUser())
-                .in(UserCoupon::getCouponId, couponIds)
-                .list();
+        Long userId = UserContext.getUser();
+        // userId 为空说明是未登录的游客（/coupons/list 已放行登录拦截）。
+        // 这时不要去查 user_coupon，否则会拼出 user_id = null 这种恒不成立的条件，
+        // 直接按"一张都没领过"处理，让所有券都显示成可领取
+        List<UserCoupon> userCoupons = userId == null
+                ? Collections.emptyList()
+                : userCouponService.lambdaQuery()
+                        .eq(UserCoupon::getUserId, userId)
+                        .in(UserCoupon::getCouponId, couponIds)
+                        .list();
+        // 注意：不能因为 userCoupons 为空就直接返回空集合。
+        // 「用户一张券都没领过」是正常状态，此时每张券都应该是可领取的，
+        // 下面的 getOrDefault 会把没有记录的券当成 0 处理。
+        // 直接 return 会导致新用户、游客永远看不到领券列表。
 
-        if (CollUtils.isEmpty(userCoupons)) {
-            return Collections.emptyList();
-        }
-
-        //统计该用户每张优惠券已领取的优惠券数量，转为Map
-        Map<Long, Long> couponCountMap = userCoupons.stream()
+        // 统计该用户每张券已领取的总数量
+        Map<Long, Long> issuedMap = userCoupons.stream()
                 .collect(Collectors.groupingBy(UserCoupon::getCouponId, Collectors.counting()));
-        //统计该用户每张优惠券已领取的未使用优惠券数量，转为Map
-        Map<Long, Long> couponUnusedCountMap = userCoupons.stream()
-                .filter(userCoupon -> userCoupon.getStatus() == UserCouponStatus.UNUSED)
+        // 统计该用户每张券已领取且未使用的数量
+        Map<Long, Long> unusedMap = userCoupons.stream()
+                .filter(uc -> uc.getStatus() == UserCouponStatus.UNUSED)
                 .collect(Collectors.groupingBy(UserCoupon::getCouponId, Collectors.counting()));
-        //封装vo
-        List<CouponVO> couponVOList = new ArrayList<>();
+        // 3.封装VO
+        List<CouponVO> list = new ArrayList<>(coupons.size());
         for (Coupon coupon : coupons) {
-            CouponVO couponVO = BeanUtils.copyBean(coupon, CouponVO.class);
-            Long count = couponCountMap.get(coupon.getId());
-            couponVO.setAvailable(count != null && count < coupon.getUserLimit() && count < coupon.getMaxDiscountAmount());
-            couponVO.setReceived(couponUnusedCountMap.get(coupon.getId()) >0);
-            couponVOList.add(couponVO);
+            CouponVO vo = BeanUtils.copyBean(coupon, CouponVO.class);
+            // 3.1.是否可以领取 = 券本身还有库存 && 当前用户没超出每人限领数量。
+            //     库存看的是券上的 issueNum / totalNum，和个人领取数量无关；
+            //     两个 map 都要用 getOrDefault，否则 null 拆箱会 NPE
+            vo.setAvailable(
+                    coupon.getIssueNum() < coupon.getTotalNum()
+                            && issuedMap.getOrDefault(coupon.getId(), 0L) < coupon.getUserLimit()
+            );
+            // 3.2.是否已领取：有"已领且未使用"的券就算已领，前端据此显示"去使用"
+            vo.setReceived(unusedMap.getOrDefault(coupon.getId(), 0L) > 0);
+            list.add(vo);
         }
-        return couponVOList;
+        return list;
     }
 
 }
