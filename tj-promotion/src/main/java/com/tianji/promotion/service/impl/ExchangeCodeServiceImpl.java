@@ -3,6 +3,7 @@ package com.tianji.promotion.service.impl;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.tianji.common.domain.dto.PageDTO;
+import com.tianji.common.utils.CollUtils;
 import com.tianji.promotion.domain.po.Coupon;
 import com.tianji.promotion.domain.po.ExchangeCode;
 import com.tianji.promotion.domain.query.CodeQuery;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static com.tianji.promotion.constants.PromotionConstants.COUPON_CODE_MAP_KEY;
 import static com.tianji.promotion.constants.PromotionConstants.COUPON_CODE_SERIAL_KEY;
@@ -111,5 +113,41 @@ public class ExchangeCodeServiceImpl extends ServiceImpl<ExchangeCodeMapper, Exc
         //   旧值 1 → 返回 true，说明之前已经被兑换过了
         Boolean boo = redisTemplate.opsForValue().setBit(COUPON_CODE_MAP_KEY, serialNum, mark);
         return boo != null && boo;
+    }
+
+    /**
+     * 根据序列号反查它属于哪张券 —— 靠 ZSet 的「序号段上界」做范围查找，不查 DB
+     * <p>
+     * 配合 {@link #asyncGenerateCode} 里写进去的
+     * {@code coupon:code:range}（member=券id，score=该券号段的最大序列号）使用。
+     * 原理见 {@link IExchangeCodeService#exchangeTargetId(long)}。
+     * <p>
+     * ★ <b>注意：day11 3.2（LUA 版）之后，业务代码已不再调用本方法。</b>
+     * 兑换接口的校验整体搬进了 {@code exchange_coupon.lua}，
+     * 脚本里直接执行 {@code ZRANGEBYSCORE}（省掉一次网络往返）。
+     * 保留在这里作为「Java 版怎么反查券」的参照实现。
+     */
+    @Override
+    public Long exchangeTargetId(long serialNum) {
+        // 1.找「score 不小于 serialNum」的第一个成员。
+        //    ★ 上界为什么是 serialNum + 5000：
+        //      单张券的号段跨度 = coupon.totalNum，而 CouponFormDTO 上有
+        //      @Range(max = 5000, min = 1)，即最长也只有 5000。
+        //      覆盖 serialNum 的那张券，其上界 ≤ 起点 + 4999 ≤ serialNum + 4999，
+        //      所以 [serialNum, serialNum + 5000] 一定能括住正确答案。
+        //      有了上界，范围更小、ZSet 查找更快（比用无穷大更划算）。
+        //    ★ LIMIT 0 1：只要第一个，ZSet 按 score 升序返回
+        Set<String> results = redisTemplate.opsForZSet().rangeByScore(
+                COUPON_RANGE_KEY, serialNum, serialNum + 5000, 0L, 1L);
+        if (CollUtils.isEmpty(results)) {
+            // 没有券的号段覆盖这个序列号 → 说明这个码压根不存在
+            return null;
+        }
+        // 2.取第一个（就是 score 最小的那个）转成 couponId
+        //    ★ 能这么取是因为返回的 Set 底层是 LinkedHashSet（保序）：
+        //      Redis 返回的数据本身按 score 升序，LinkedHashSet 又保持插入顺序。
+        //      Set 没有 get(int)，所以只能用 iterator().next()。
+        String next = results.iterator().next();
+        return Long.parseLong(next);
     }
 }

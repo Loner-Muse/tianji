@@ -24,6 +24,9 @@ public interface MqConstants {
 
          /*点赞记录有关的交换机*/
         String LIKE_RECORD_EXCHANGE = "like.record.topic";
+
+        /*优惠券促销相关的交换机*/
+        String PROMOTION_EXCHANGE = "promotion.topic";
     }
     interface Queue {
         String ERROR_QUEUE_TEMPLATE = "error.{}.queue";
@@ -71,5 +74,11 @@ public interface MqConstants {
         String REFUND_CHANGE = "refund.status.change";
 
         String ORDER_DELAY_KEY = "delay.order.query";
+
+        /*优惠券领取的RoutingKey
+          手动领取和兑换码兑换共用这一个 key：两条入口的消息体都是 UserCouponDTO，
+          消费者 checkAndCreateUserCoupon 靠 serialNum 是否为空来区分要不要标记兑换码，
+          所以不需要为兑换码单独开一个 RoutingKey（开了反而要维护第二个队列和监听器）*/
+        String COUPON_RECEIVE = "coupon.receive";
     }
 }

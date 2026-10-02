@@ -52,6 +52,16 @@
             <groupId>org.redisson</groupId>
             <artifactId>redisson</artifactId>
         </dependency>
+        <!--mq-->
+        <!--
+            必须在这里显式声明：tj-common 里的 spring-amqp / spring-rabbit
+            是 <scope>provided</scope>，不会传递给依赖它的模块。
+            不加以依赖的话，RabbitMqHelper / @RabbitListener 都不可用。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
         <!--discovery-->
         <dependency>
             <groupId>com.alibaba.cloud</groupId>

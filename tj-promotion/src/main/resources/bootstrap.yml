@@ -22,6 +22,8 @@ spring:
             refresh: false
           - data-id: shared-feign.yaml # 共享feign配置
             refresh: false
+          - data-id: shared-mq.yaml # 共享MQ配置
+            refresh: false
           - data-id: shared-xxljob.yaml # 共享xxl-job配置
             refresh: false
 tj:

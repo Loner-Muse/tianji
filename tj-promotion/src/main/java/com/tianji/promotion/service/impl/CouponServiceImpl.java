@@ -7,8 +7,10 @@ import com.tianji.common.exceptions.BadRequestException;
 import com.tianji.common.exceptions.BizIllegalException;
 import com.tianji.common.utils.BeanUtils;
 import com.tianji.common.utils.CollUtils;
+import com.tianji.common.utils.DateUtils;
 import com.tianji.common.utils.StringUtils;
 import com.tianji.common.utils.UserContext;
+import com.tianji.promotion.constants.PromotionConstants;
 import com.tianji.promotion.domain.dto.CouponFormDTO;
 import com.tianji.promotion.domain.dto.CouponIssueFormDTO;
 import com.tianji.promotion.domain.po.Coupon;
@@ -29,14 +31,12 @@ import com.tianji.promotion.service.IExchangeCodeService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.tianji.promotion.service.IUserCouponService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -55,6 +55,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
 
     private final IExchangeCodeService codeService;
     private final IUserCouponService userCouponService;
+    private final StringRedisTemplate redisTemplate;
 
     private final CategoryCache categoryCache;
 
@@ -137,13 +138,51 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         // 4.3.写库
         updateById(c);
 
-        // 5.兑换码方式的券，且原本是「待发放」→ 异步生成兑换码
+        // 5.立刻发放 → 写缓存
+        //    ★ 必须放在 updateById 之后：Redis 不受数据库事务回滚的保护，
+        //      先写缓存后写库，一旦写库失败回滚，缓存里就会残留一张"线上并不存在"的券。
+        //    ★ 必须传 DB 查出来的 coupon，不能传 dto 拷出来的 c：
+        //      CouponIssueFormDTO 里只有发放时间，没有 totalNum / userLimit，
+        //      用它写缓存会把这两个字段写成 null，后续库存校验直接 NPE。
+        //      coupon 里的 issueBeginTime 还是旧值，从 c 上回填成刚写入库的新值。
+        if (isBegin) {
+            coupon.setIssueBeginTime(c.getIssueBeginTime());
+            coupon.setIssueEndTime(c.getIssueEndTime());
+            cacheCouponInfo(coupon);
+        }
+
+        // 6.兑换码方式的券，且原本是「待发放」→ 异步生成兑换码
         //    注意这里读的是 coupon.getStatus()，即改状态之前的原始值，
         //    这样从「暂停」恢复发放时不会重复生成一批码
         if (coupon.getObtainWay() == ObtainType.ISSUE && coupon.getStatus() == CouponStatus.DRAFT) {
             coupon.setIssueEndTime(c.getIssueEndTime());
             codeService.asyncGenerateCode(coupon);
         }
+    }
+
+    /**
+     * 把优惠券的校验信息写入 Redis 缓存
+     * <p>
+     * 结构：{@code prs:coupon:{couponId}} 是一个 Hash，
+     * field 为 issueBeginTime / issueEndTime / totalNum / userLimit，
+     * value 统一存字符串。只存校验需要的这 4 个字段，不存整个券对象，省内存。
+     * <p>
+     * 用 Hash 而不是一整个 JSON 字符串的原因：后面要单独对字段做 HINCRBY（扣库存）。
+     *
+     * @param coupon 必须是数据库里的券对象（含完整字段），否则写进去的是 null
+     */
+    private void cacheCouponInfo(Coupon coupon) {
+        // 一条 map 直接 putAll，避免 4 次网络往返
+        Map<String, String> map = new HashMap<>(4);
+        // 时间统一转成毫秒时间戳存：一来 Hash 的值只能是字符串，
+        // 二来读取端反序列化时不用再解析时间格式
+        map.put("issueBeginTime", String.valueOf(DateUtils.toEpochMilli(coupon.getIssueBeginTime())));
+        map.put("issueEndTime", String.valueOf(DateUtils.toEpochMilli(coupon.getIssueEndTime())));
+        map.put("totalNum", String.valueOf(coupon.getTotalNum()));
+        map.put("userLimit", String.valueOf(coupon.getUserLimit()));
+        // ★ key 必须用常量拼，不能加引号：写成 "COUPON_CACHE_KEY_PREFIX" 会被当成字面量，
+        //   最终 key 变成 COUPON_CACHE_KEY_PREFIX123，和读取端对不上，永远读不到券
+        redisTemplate.opsForHash().putAll(PromotionConstants.COUPON_CACHE_KEY_PREFIX + coupon.getId(), map);
     }
 
     @Transactional
@@ -197,6 +236,8 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         removeById(id);
         // 4.删它下面的范围记录（没有记录时影响0行，无害，无需先判断 specific）
         scopeService.removeByCouponId(id);
+        // 5.删缓存
+        redisTemplate.delete(PromotionConstants.COUPON_CACHE_KEY_PREFIX + id);
     }
 
     @Override
@@ -244,23 +285,59 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         //    issueBeginTime / issueEndTime 保留原值，等「恢复发放」时继续沿用
         coupon.setStatus(CouponStatus.PAUSE);
         updateById(coupon);
+        // 4.删缓存
+        //    暂停后这张券就不可领了，缓存留着会让读缓存的那条链路仍然认为它在发放中。
+        //    必须和 updateById 同步删除，否则「暂停」这个动作对领券接口是无效的。
+        redisTemplate.delete(PromotionConstants.COUPON_CACHE_KEY_PREFIX + id);
     }
 
     /**
-     * 定时开始发放：把到达发放开始时间的「未开始」券改成「发放中」
+     * 定时开始发放：把到达发放开始时间的「未开始」券改成「发放中」，并写入缓存
      * <p>
-     * 用一条批量 UPDATE 完成，不把数据捞到内存再逐条改。
+     * ★ 为什么必须同时写缓存：券缓存不是凭空就有的，
+     * 它只在「发放」这个动作里产生（立刻发放走 beginIssue，延时发放就走这里）。
+     * 如果这里只改状态不写缓存，这张券会被改成发放中，
+     * 但用户点领取时 queryCouponByCache 读不到任何东西 → 直接抛"优惠券不存在"。
+     * 也就是"延时发放"这条业务线完全走不通。
+     * <p>
+     * ★ 为什么改成"先查、再改、最后逐条写缓存"：
+     * 原来是"一条批量 UPDATE 搞定"，那样确实更省事，但拿不到券的明细，没法逐条写缓存。
+     * 而且查询必须在 UPDATE **之前**做 —— 因为 UPDATE 会把状态改成 ISSUING，
+     * 之后再按 issue_begin_time 去反查，会把"早就发放完、只是没到结束时间"的老券也捞出来，
+     * 造成脏数据被重新写进缓存。
+     * <p>
      * 注意状态条件必须是 UN_ISSUE（已排期、等开始），而不是 DRAFT（还没排期）。
      * 将来换 XXL-JOB 时，在这里追加分片条件：
      * {@code .apply("MOD(id, {0}) = {1}", total, index)}
      */
     @Override
     public void beginIssueBatch() {
-        lambdaUpdate()
-                .set(Coupon::getStatus, CouponStatus.ISSUING)
+        // 1.查出「已经排期、且到达开始时间」的券（此时状态还是 UN_ISSUE）
+        List<Coupon> coupons = lambdaQuery()
                 .eq(Coupon::getStatus, CouponStatus.UN_ISSUE)
                 .le(Coupon::getIssueBeginTime, LocalDateTime.now())
+                .list();
+        if (CollUtils.isEmpty(coupons)) {
+            return;
+        }
+        // 2.按 id 批量改状态
+        //    ★ 这里特意用 in(id, ids) 而不是重写一遍原来的查询条件：
+        //      保证"被改状态的行"就是"第 1 步查出来的这批"，
+        //      否则两次查询之间若有新券满足条件，就会出现"改了状态却漏了缓存"的券
+        List<Long> ids = coupons.stream()
+                .map(Coupon::getId)
+                .collect(Collectors.toList());
+        lambdaUpdate()
+                .set(Coupon::getStatus, CouponStatus.ISSUING)
+                .in(Coupon::getId, ids)
                 .update();
+        // 3.逐条写缓存
+        //    ★ 时间用券上排期的原值，不能像 beginIssue 那样覆盖成 now：
+        //      beginIssue 是"立刻发放"，所以要把开始时间改成当前时刻；
+        //      而这里是"延时发放"，开始时间是运营早就排好的，原样保留才符合语义
+        for (Coupon coupon : coupons) {
+            cacheCouponInfo(coupon);
+        }
     }
 
     /**
