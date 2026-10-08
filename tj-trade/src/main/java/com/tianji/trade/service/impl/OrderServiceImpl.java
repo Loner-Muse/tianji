@@ -4,8 +4,12 @@ import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.tianji.api.client.course.CourseClient;
+import com.tianji.api.client.promotion.PromotionClient;
 import com.tianji.api.constants.CourseStatus;
 import com.tianji.api.dto.course.CourseSimpleInfoDTO;
+import com.tianji.api.dto.promotion.CouponDiscountDTO;
+import com.tianji.api.dto.promotion.OrderCouponDTO;
+import com.tianji.api.dto.promotion.OrderCourseDTO;
 import com.tianji.api.dto.trade.OrderBasicDTO;
 import com.tianji.common.autoconfigure.mq.RabbitMqHelper;
 import com.tianji.common.constants.MqConstants;
@@ -30,6 +34,7 @@ import com.tianji.trade.mapper.OrderMapper;
 import com.tianji.trade.service.ICartService;
 import com.tianji.trade.service.IOrderDetailService;
 import com.tianji.trade.service.IOrderService;
+import io.seata.spring.annotation.GlobalTransactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,12 +62,41 @@ import static com.tianji.trade.constants.TradeErrorInfo.ORDER_NOT_EXISTS;
 public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements IOrderService {
 
     private final CourseClient courseClient;
+    /**
+     * 促销服务的远程调用客户端（Feign）
+     * <p>
+     * ★ 为什么交易服务要依赖促销服务：下单时「算优惠」和「核销券」都归促销服务管，
+     * 本服务通过 Feign 跨服务调用；促销服务不可用时走 PromotionClientFallback 降级。
+     */
+    private final PromotionClient promotionClient;
     private final IOrderDetailService detailService;
     private final ICartService cartService;
     private final TradeProperties tradeProperties;
     private final RabbitMqHelper rabbitMqHelper;
 
+    /**
+     * 下单
+     * <p>
+     * ★★ 为什么这里需要 Seata 的 {@code @GlobalTransactional}（day12 3.2.5）：
+     * 这个方法里有两次<b>跨服务</b>的数据修改：
+     * <pre>
+     *   ① 本地：写 order / order_detail   （tj_trade 库）
+     *   ② 远程：promotionClient.writeOffCoupon(...)  →  改 user_coupon / coupon（tj_promotion 库）
+     * </pre>
+     * 普通的 {@code @Transactional} 只能管住 ①；如果 ① 成功、② 失败，
+     * 就会出现「订单创建了、券却没核销」——用户能拿同一张券反复下单，<b>直接资损</b>。
+     * <p>
+     * {@code @GlobalTransactional} 会把这两步包成一个<b>全局事务</b>：
+     * 由 Seata 的 TC（独立部署的 seata-server）协调，任一步失败则整体回滚。
+     * <p>
+     * ★ 本方法是 TM（事务发起方）；写 tj_promotion 库的那一步由促销服务作为 RM 参与，
+     * 它靠 Seata 的 DataSourceProxy 自动记录 undo_log 来实现回滚。
+     * <p>
+     * ★ 注意：这里两个注解得同时保留 ——
+     * {@code @Transactional} 管本地库的事务，{@code @GlobalTransactional} 管跨服务的全局事务。
+     */
     @Override
+    @GlobalTransactional
     @Transactional
     public PlaceOrderResultVO placeOrder(PlaceOrderDTO placeOrderDTO) {
         Long userId = UserContext.getUser();
@@ -73,8 +107,33 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         // 2.1.计算订单金额
         Integer totalAmount = courseInfos.stream()
                 .map(CourseSimpleInfoDTO::getPrice).reduce(Integer::sum).orElse(0);
-        // TODO 2.2.计算优惠金额
+        // 2.2.计算优惠金额（远程调用促销服务）
+        //     ★ 为什么必须由服务端算、不能信前端传的金额：
+        //       前端参数可篡改；而且下单这一刻要【重新校验】券是否仍然可用（状态 / 有效期 / 门槛）。
+        //     ★ 促销服务不可用时走降级：queryDiscountDetailByOrder 返回 null ⇒ 按原价下单，
+        //       用户能正常买到东西，只是没优惠 —— "下单"比"优惠"重要。
         order.setDiscountAmount(0);
+        List<Long> couponIds = placeOrderDTO.getCouponIds();
+        CouponDiscountDTO discount = null;
+        if (CollUtils.isNotEmpty(couponIds)) {
+            // 把课程信息转成促销服务要的 DTO（★ 分类用三级分类 id，券的使用范围就限定在三级分类）
+            List<OrderCourseDTO> orderCourses = new ArrayList<>(courseInfos.size());
+            for (CourseSimpleInfoDTO c : courseInfos) {
+                orderCourses.add(new OrderCourseDTO()
+                        .setId(c.getId())
+                        .setCateId(c.getThirdCateId())
+                        .setPrice(c.getPrice()));
+            }
+            // 远程调用：促销服务会重新校验券，并返回优惠总额 + 每件商品的优惠明细
+            discount = promotionClient.queryDiscountDetailByOrder(
+                    new OrderCouponDTO(couponIds, orderCourses));
+            if (discount != null) {
+                order.setDiscountAmount(discount.getDiscountAmount());
+                // ★ 存促销服务确认过的【用户券id】（不是前端传来的原值）——
+                //   后面的核销、退券、查规则都靠它
+                order.setCouponIds(discount.getIds());
+            }
+        }
         Integer realAmount = totalAmount - order.getDiscountAmount();
         // 2.3.封装其它信息
         order.setUserId(userId);
@@ -87,9 +146,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         order.setId(orderId);
 
         // 3.封装订单详情
+        //    ★ 每件商品的优惠金额从 discountDetail 里取（key 是课程 id）；
+        //      取不到就是 0（这件商品不在券的适用范围内，或者压根没用券）
         List<OrderDetail> orderDetails = new ArrayList<>(courseInfos.size());
         for (CourseSimpleInfoDTO courseInfo : courseInfos) {
-            orderDetails.add(packageOrderDetail(courseInfo, order));
+            int discountValue = discount == null
+                    ? 0
+                    : discount.getDiscountDetail().getOrDefault(courseInfo.getId(), 0);
+            orderDetails.add(packageOrderDetail(courseInfo, order, discountValue));
         }
 
         // 4.写入数据库
@@ -98,7 +162,18 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         // 5.删除购物车数据
         cartService.deleteCartByUserAndCourseIds(userId, placeOrderDTO.getCourseIds());
 
-        // 6.构建下单结果
+        // 6.核销优惠券
+        //    ★ 放在最后：前面都成功了才核销。
+        //    ★ 判空用 order.getCouponIds()：只有【真正生效的券】才需要核销
+        //      （discount 非 null 也可能一张都没用上，那时 ids 是空的）
+        //    ★ 核销失败必须让整个下单失败（降级实现里是抛异常的）——
+        //      否则"订单创建成功、券却没核销"，用户能拿同一张券反复下单 ⇒ 资损。
+        //    ★ 这一步与上面的写库属于跨服务操作，靠 Seata 的 @GlobalTransactional 保证一致性。
+        if (CollUtils.isNotEmpty(order.getCouponIds())) {
+            promotionClient.writeOffCoupon(order.getCouponIds());
+        }
+
+        // 7.构建下单结果
         return PlaceOrderResultVO.builder()
                 .orderId(orderId)
                 .payAmount(realAmount)
@@ -157,7 +232,8 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         order.setId(orderId);
 
         // 3.订单详情
-        OrderDetail detail = packageOrderDetail(courseInfo, order);
+        // 免费课程报名：金额恒为 0，所以优惠金额也传 0
+        OrderDetail detail = packageOrderDetail(courseInfo, order, 0);
 
         // 4.写入数据库
         saveOrderAndDetails(order, CollUtils.singletonList(detail));
@@ -204,7 +280,20 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         return vo;
     }
 
-    private OrderDetail packageOrderDetail(CourseSimpleInfoDTO courseInfo, Order order) {
+    /**
+     * 组装订单明细
+     *
+     * @param courseInfo    课程信息
+     * @param order         所属订单
+     * @param discountValue 这件商品分摊到的优惠金额（由促销服务算出的 discountDetail 提供）
+     *                      <p>
+     *                      ★ 下面这两个字段是「部分退款」的基础：
+     *                      {@code discountAmount} = 这件商品优惠了多少，
+     *                      {@code realPayAmount} = 这件商品实付多少（原价 - 优惠）。
+     *                      将来用户只退其中一件时，按它的 {@code realPayAmount} 退钱；
+     *                      不能按原价退 —— 那样等于把优惠也退掉了，平台会吃亏。
+     */
+    private OrderDetail packageOrderDetail(CourseSimpleInfoDTO courseInfo, Order order, Integer discountValue) {
         OrderDetail detail = new OrderDetail();
         detail.setUserId(order.getUserId());
         detail.setOrderId(order.getId());
@@ -214,7 +303,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         detail.setCoverUrl(courseInfo.getCoverUrl());
         detail.setName(courseInfo.getName());
         detail.setValidDuration(courseInfo.getValidDuration());
-        detail.setDiscountAmount(0);// TODO 计算优惠金额
+        // 这件商品的优惠金额（调用方按课程id从 discountDetail 里取出来传入）
+        detail.setDiscountAmount(discountValue);
+        // 实付金额 = 原价 - 该商品的优惠
         detail.setRealPayAmount(courseInfo.getPrice() - detail.getDiscountAmount());
         return detail;
     }
@@ -238,7 +329,16 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
     }
 
+    /**
+     * 取消订单
+     * <p>
+     * ★★ 同样需要 {@code @GlobalTransactional}（day12 3.3.5）：
+     * 这里有「本地改 order / order_detail 状态」+「远程 promotionClient.refundCoupon 退券」两次跨服务修改。
+     * 如果订单状态改成"已取消"了、券却没退回，用户就白白损失一张券 ——
+     * 全局事务保证"要么都成，要么都不成"。
+     */
     @Override
+    @GlobalTransactional
     @Transactional
     public void cancelOrder(Long orderId) {
         Long userId = UserContext.getUser();
@@ -269,6 +369,15 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         }
         // 5.更新订单条目的状态
         detailService.updateStatusByOrderId(orderId, OrderStatus.CLOSED.getValue());
+        // 6.退还优惠券
+        //    ★ 判空：没用券的订单（couponIds 为空）不需要退，
+        //      也避免下游 SQL 用 IN <foreach> 拼出 IN () 而报语法错误
+        //    ★ 退券失败必须让取消订单失败（降级实现里是抛异常的）——
+        //      否则"订单取消了、券却没退回"，用户白白损失一张券。
+        //    ★ 这一步与上面的订单状态更新是跨服务操作，靠 Seata 的 @GlobalTransactional 保证一致性。
+        if (CollUtils.isNotEmpty(order.getCouponIds())) {
+            promotionClient.refundCoupon(order.getCouponIds());
+        }
     }
 
     @Override
@@ -349,6 +458,18 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         vo.setDetails(dvs);
         // 3.3.订单进度
         vo.setProgressNodes(detailService.packageProgressNodes(order, null));
+        // 3.4.优惠券描述
+        //     order 表里只存了用过的【用户券id】，而详情页要展示"用了哪些券、规则是什么"，
+        //     所以要拿这批 id 回促销服务查规则文案。
+        //     ★ 没用券的订单不调远程（也避免下游 SQL 拼出 IN () 报错）
+        List<String> rules;
+        if (CollUtils.isEmpty(order.getCouponIds())) {
+            rules = CollUtils.emptyList();
+        } else {
+            rules = promotionClient.queryDiscountRules(order.getCouponIds());
+        }
+        // 多张券的规则用 "/" 拼成一行，前端直接展示
+        vo.setCouponDesc(String.join("/", rules));
         return vo;
     }
 

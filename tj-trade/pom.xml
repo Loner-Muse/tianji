@@ -93,6 +93,28 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
+
+        <!--seata：分布式事务（day12 3.2.5 / 3.3.5）
+            场景：下单时"写订单(tj_trade) + 核销券(tj_promotion)"跨了两个服务两个库，
+                  任何一边失败另一边都要回滚，靠 @GlobalTransactional 把它们绑成一个全局事务。
+            写法照抄 tj-course：先排除 spring-cloud-starter-alibaba-seata 自带的低版本 starter（1.4.2），
+            再显式引入 seata-spring-boot-starter 的 1.5.1（版本号由根 pom 的 seata-version 属性提供）。-->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-seata</artifactId>
+            <exclusions>
+                <!--版本较低，1.4.2，因此排除-->
+                <exclusion>
+                    <artifactId>seata-spring-boot-starter</artifactId>
+                    <groupId>io.seata</groupId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <artifactId>seata-spring-boot-starter</artifactId>
+            <groupId>io.seata</groupId>
+            <version>${seata-version}</version>
+        </dependency>
     </dependencies>
     <build>
         <finalName>${project.artifactId}</finalName>

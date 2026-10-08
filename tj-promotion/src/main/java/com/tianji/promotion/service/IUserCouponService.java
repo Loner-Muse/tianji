@@ -7,6 +7,8 @@ import com.tianji.promotion.domain.po.UserCoupon;
 import com.tianji.promotion.domain.query.UserCouponQuery;
 import com.tianji.promotion.domain.vo.CouponVO;
 
+import java.util.List;
+
 /**
  * <p>
  * 用户领取优惠券的记录 服务类
@@ -60,4 +62,19 @@ public interface IUserCouponService extends IService<UserCoupon> {
      * @param query 分页参数 + 券状态过滤条件
      */
     PageDTO<CouponVO> queryMyCouponPage(UserCouponQuery query);
+
+    void writeOffCoupon(List<Long> userCouponIds);
+
+    void refundCoupon(List<Long> userCouponIds);
+
+    /**
+     * 查询优惠券的规则描述（用于订单详情页展示"这个订单用了哪些券"）
+     * <p>
+     * 订单表里只存了用过的【用户券id】，没有规则文案，
+     * 所以查订单详情时要拿着这批 id 回来查规则。
+     *
+     * @param userCouponIds 用户优惠券 id 集合（可为空 —— 订单没用券时就是空）
+     * @return 规则文案列表，如 ["满100减15", "每满100减10，上限50"]；查不到或入参为空时返回空集合
+     */
+    List<String> queryDiscountRules(List<Long> userCouponIds);
 }

@@ -1,5 +1,36 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tianji.promotion.mapper.UserCouponMapper">
+    <select id="queryMyCoupons" resultType="com.tianji.promotion.domain.po.Coupon">
+        SELECT c.id, c.discount_type, c.`specific`, c.discount_value, c.threshold_amount,
+               c.max_discount_amount, uc.id AS creater
+        FROM user_coupon uc
+                 INNER JOIN coupon c ON uc.coupon_id = c.id
+        WHERE uc.user_id = #{userId} AND uc.status = 1
+    </select>
 
+    <!--
+      根据用户券id集合批量查优惠券：多表联查 + 状态过滤
+      ★ 为什么用 <foreach>：
+        SQL 的 IN 后面必须跟「一对括号括起来的多个值」：IN (1, 2, 3)
+        直接写 IN #{userCouponIds} 会被解析成 IN (?) ——只有一个占位符，
+        而参数是一个 List，MyBatis 绑不上去 → SQL 语法错误。
+        <foreach> 的作用就是把 List 展开成 (?, ?, ?)。
+      ★ collection 的值要和 Mapper 上 @Param("userCouponIds") 的名字一致
+      ★ status 传的是枚举 UserCouponStatus：它的 value 字段上有 @EnumValue，
+        MyBatis-Plus 会自动取那个 int（UNUSED → 1）写进 SQL，不用手写数字或字符串
+      ★ uc.id AS creater：把「用户券id」借 creater 字段带出来，
+        后面算方案时用它填 CouponDiscountDTO.ids
+    -->
+    <select id="queryCouponByUserCouponIds" resultType="com.tianji.promotion.domain.po.Coupon">
+        SELECT c.id, c.discount_type, c.`specific`, c.discount_value, c.threshold_amount,
+               c.max_discount_amount, uc.id AS creater
+        FROM user_coupon uc
+                 INNER JOIN coupon c ON uc.coupon_id = c.id
+        WHERE uc.id IN
+        <foreach collection="userCouponIds" item="userCouponId" open="(" separator="," close=")">
+            #{userCouponId}
+        </foreach>
+        AND uc.status = #{status}
+    </select>
 </mapper>

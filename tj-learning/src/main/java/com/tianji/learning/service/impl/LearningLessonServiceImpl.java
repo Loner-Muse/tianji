@@ -259,6 +259,31 @@ public class LearningLessonServiceImpl extends ServiceImpl<LearningLessonMapper,
     }
 
     /**
+     * 从课表移除课程(前端"我的课程"移除按钮调用)
+     * <p>按 用户id+课程id 联合条件删除,保证只能移除自己的课表记录</p>
+     *
+     * @param userId   用户id(为null时取当前登录用户)
+     * @param courseId 课程id
+     */
+    @Override
+    public void deleteCourseFromLesson(Long userId, Long courseId) {
+        // 1.兜底:未传用户id时取当前登录用户
+        if (userId == null) {
+            userId = UserContext.getUser();
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException("用户未登录");
+        }
+        if (courseId == null) {
+            throw new IllegalArgumentException("课程id不能为空");
+        }
+        // 2.按 用户+课程 联合条件删除自己的课表记录(删0行不算错误,幂等)
+        remove(new LambdaQueryWrapper<LearningLesson>()
+                .eq(LearningLesson::getUserId, userId)
+                .eq(LearningLesson::getCourseId, courseId));
+    }
+
+    /**
      * 创建学习计划
      * <p>给课表中的指定课程设置每周学习频率;若原本没有计划,置为"计划进行中"</p>
      *

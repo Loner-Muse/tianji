@@ -38,6 +38,14 @@ public interface ILearningLessonService extends IService<LearningLesson> {
 
     Integer countLearningLessonByCourse(Long courseId);
 
+    /**
+     * 从课表移除课程
+     *
+     * @param userId   用户id(为null时取当前登录用户)
+     * @param courseId 课程id
+     */
+    void deleteCourseFromLesson(Long userId, Long courseId);
+
     void createLearningPlan(@NotNull @Min(1) Long courseId, @NotNull @Range(min = 1, max = 50) Integer freq);
 
     LearningPlanPageVO queryMyLessonPagePlan(PageQuery query);

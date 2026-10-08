@@ -94,6 +94,18 @@ public class LearningLessonController {
     }
 
     /**
+     * 从课表移除课程
+     *
+     * @param courseId 课程id
+     */
+    @ApiOperation("从课表移除课程")
+    @DeleteMapping("/{courseId}")
+    public void deleteCourseFromLesson(@ApiParam(value = "课程id", example = "2") @PathVariable("courseId") Long courseId) {
+        // userId传null,由service兜底取当前登录用户(保证只能删自己的)
+        learningLessonService.deleteCourseFromLesson(null, courseId);
+    }
+
+    /**
      * 创建学习计划
      *
      * @param planDTO 学习计划表单(courseId/freq)

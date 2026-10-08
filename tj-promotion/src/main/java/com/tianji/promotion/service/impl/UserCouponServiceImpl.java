@@ -23,6 +23,7 @@ import com.tianji.promotion.mapper.CouponMapper;
 import com.tianji.promotion.mapper.UserCouponMapper;
 import com.tianji.promotion.service.IExchangeCodeService;
 import com.tianji.promotion.service.IUserCouponService;
+import com.tianji.promotion.strategy.discount.DiscountStrategy;
 import com.tianji.promotion.utils.CodeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -85,6 +86,10 @@ public class UserCouponServiceImpl extends ServiceImpl<UserCouponMapper, UserCou
         RECEIVE_COUPON_SCRIPT = RedisScript.of(new ClassPathResource("lua/receive_coupon.lua"), Long.class);
         EXCHANGE_COUPON_SCRIPT = RedisScript.of(new ClassPathResource("lua/exchange_coupon.lua"), String.class);
     }
+
+
+    private final UserCouponMapper userCouponMapper;
+
 
     /**
      * 手动领取优惠券（LUA 脚本版，day11 3.2）
@@ -260,6 +265,185 @@ public class UserCouponServiceImpl extends ServiceImpl<UserCouponMapper, UserCou
             vos.add(vo);
         }
         return PageDTO.of(page, vos);
+    }
+
+    /**
+     * 核销优惠券（day12 3.2）
+     * <p>
+     * 场景：下单成功时把用掉的券标记为"已使用"，并给 coupon 的"已使用数量"+1。
+     * <p>
+     * ★ 只处理「未使用 且 还在有效期内」的券：
+     * 未使用的券才需要核销；已过期的不该被核销（正常流程下交易服务也不会传过期的券）。
+     */
+    @Override
+    @Transactional
+    public void writeOffCoupon(List<Long> userCouponIds) {
+        // 1.按 id 批量查询
+        //    ★★ 用 MP 自带的 listByIds（内部走 selectBatchIds，生成 WHERE id IN (...)），
+        //       不要写成 userCouponMapper.selectList(lambdaQuery().in(...)) ——
+        //       ServiceImpl.lambdaQuery() 返回的是【链式 Wrapper】(LambdaQueryChainWrapper)，
+        //       它不能当普通 Wrapper 参数传给 mapper.selectList()：
+        //       MP 执行时会对它调 getSqlFirst()，直接抛
+        //       "can not use this method for getSqlFirst"（实测踩过）。
+        List<UserCoupon> userCoupons = listByIds(userCouponIds);
+        if (CollUtils.isEmpty(userCoupons)) {
+            return;
+        }
+        // 2.挑出「要核销的券」
+        //    ★ now 提到循环外：一批券用同一个时间点判断，结果不会自相矛盾
+        LocalDateTime now = LocalDateTime.now();
+        List<UserCoupon> toUpdate = new ArrayList<>(userCoupons.size());
+        for (UserCoupon userCoupon : userCoupons) {
+            // 只有「未使用」的券才需要核销
+            // ★ 枚举在前：userCoupon.getStatus() 为 null 时也不会 NPE
+            if (UserCouponStatus.UNUSED != userCoupon.getStatus()) {
+                continue;
+            }
+            // 有效期判断：过期的券不核销
+            if (userCoupon.getTermEndTime() == null || now.isAfter(userCoupon.getTermEndTime())) {
+                continue;
+            }
+            userCoupon.setStatus(UserCouponStatus.USED);
+            // ★ 记录使用时间：日后退券、对账、排查"这张券什么时候被用掉的"都要靠它
+            //   （讲义没写这一步，但 user_coupon.used_time 字段就是为此存在的）
+            userCoupon.setUsedTime(now);
+            toUpdate.add(userCoupon);
+        }
+        if (CollUtils.isEmpty(toUpdate)) {
+            return;
+        }
+        // 3.批量更新 user_coupon（MP 的 updateBatchById 走 JDBC 批处理，一次网络往返）
+        updateBatchById(toUpdate);
+        // 4.券的「已使用数量」+1（和退券时的 -1 对称）
+        //    ★ 逐个调用而不是 WHERE id IN (...)：同一张 coupon 可能对应多张被核销的用户券，
+        //      而 SQL 的 IN 是集合语义（IN (100,100) 只命中一行）⇒ 会少加。
+        for (UserCoupon userCoupon : toUpdate) {
+            couponMapper.incrUsedNum(userCoupon.getCouponId());
+        }
+    }
+
+    /**
+     * 退还优惠券（day12 3.3）
+     * <p>
+     * 场景：订单退款时，把下单用掉的券还回去。
+     * <p>
+     * ★★ 核心认知：<b>「退券」不等于「恢复成未使用」</b>。
+     * 券是有有效期的，从「用掉」到「退款」之间可能已经过了有效期。
+     * 这时如果无脑恢复成 UNUSED，就等于把一张早该作废的券【复活】了 ——
+     * 用户能拿它继续下单，直接造成资损。
+     * <p>
+     * ★ 所以这里要分清<b>两件很容易混的事</b>：
+     * <pre>
+     *   ① 哪些券要退？   → 状态是 USED 的【都要退】，跟有没有过期无关
+     *   ② 退成什么状态？ → 由「现在还在不在有效期内」决定：
+     *                        已过期 → EXPIRED（券是退回来了，但它就是过期状态）
+     *                        未过期 → UNUSED （恢复成可用的未使用）
+     * </pre>
+     * ★ 常见错法是把 ② 的条件塞进 ①（写成 {@code USED && 未过期}），
+     * 那样【已过期的券会完全不被处理】—— 状态一直卡在 USED，used_num 也不减。
+     */
+    @Override
+    @Transactional
+    public void refundCoupon(List<Long> userCouponIds) {
+        // 1.按 id 批量查询
+        //    ★★ 用 MP 自带的 listByIds（内部走 selectBatchIds，生成 WHERE id IN (...)），
+        //       不要写成 userCouponMapper.selectList(lambdaQuery().in(...)) ——
+        //       ServiceImpl.lambdaQuery() 返回的是【链式 Wrapper】(LambdaQueryChainWrapper)，
+        //       它不能当普通 Wrapper 参数传给 mapper.selectList()：
+        //       MP 执行时会对它调 getSqlFirst()，直接抛
+        //       "can not use this method for getSqlFirst"（实测踩过）。
+        List<UserCoupon> userCoupons = listByIds(userCouponIds);
+        if (CollUtils.isEmpty(userCoupons)) {
+            return;
+        }
+        // 2.挑出「要退的券」，并定好它们各自要改成什么状态
+        //    ★ now 提到循环外：一是少调几次，二是保证这一批券用【同一个时间点】判断，结果不会自相矛盾
+        LocalDateTime now = LocalDateTime.now();
+        List<UserCoupon> toUpdate = new ArrayList<>(userCoupons.size());
+        for (UserCoupon userCoupon : userCoupons) {
+            // 2.1 只有「已使用」的券才需要退
+            //     未使用（本来就没用掉）、已过期（本来就不该退）都直接跳过
+            //     ★ 注意用枚举在前：userCoupon.getStatus() 为 null 时也不会 NPE
+            if (UserCouponStatus.USED != userCoupon.getStatus()) {
+                continue;
+            }
+            // 2.2 ★ 退成什么状态，由「现在还在不在有效期内」决定：
+            //       已经过期 → 标成 EXPIRED，不能让过期券变回可用的券
+            //       还在期内 → 恢复成 UNUSED
+            userCoupon.setStatus(
+                    now.isAfter(userCoupon.getTermEndTime())
+                            ? UserCouponStatus.EXPIRED
+                            : UserCouponStatus.UNUSED
+            );
+            toUpdate.add(userCoupon);
+        }
+        if (CollUtils.isEmpty(toUpdate)) {
+            return;
+        }
+        // 3.批量更新 user_coupon
+        //    MP 的 updateBatchById 底层走 JDBC 批处理：把 N 条 UPDATE 打包，
+        //    【一次网络往返】发给数据库；而 for 里逐条 updateById 是 N 次网络往返。
+        //    ★ 这里仍是普通的 for 循环收集，没有用 stream 链式 —— 批量与否和 stream 无关。
+        updateBatchById(toUpdate);
+        // 4.清掉「使用时间」
+        //    券已经退回来了（状态是 UNUSED 或 EXPIRED），就不该再留着"使用时间"，
+        //    否则会出现「状态=未使用，但 used_time 有值」这种自相矛盾的数据。
+        //    ★ 必须用 lambdaUpdate 显式 set null：
+        //      updateById / updateBatchById 默认【不更新 null 字段】（FieldStrategy.NOT_NULL），
+        //      在实体上 setUsedTime(null) 是写不进去的。
+        List<Long> ids = new ArrayList<>(toUpdate.size());
+        for (UserCoupon userCoupon : toUpdate) {
+            ids.add(userCoupon.getId());
+        }
+        lambdaUpdate()
+                .set(UserCoupon::getUsedTime, null)
+                .in(UserCoupon::getId, ids)
+                .update();
+        // 5.券的「已使用数量」-1（和核销时的 +1 对称）
+        //    ★ 这一步【故意保持逐个调用】，没有写成 WHERE id IN (...)：
+        //      同一张 coupon 可能对应多张被退的用户券（比如用户分 3 次领了同一张券，这次一起退），
+        //      而 SQL 的 IN 是【集合】语义 —— WHERE id IN (100,100,100) 只会命中一行，
+        //      那样就会少减 2 次。逐个调用天然正确（每次 -1），且退券通常就几张，开销可忽略。
+        for (UserCoupon userCoupon : toUpdate) {
+            couponMapper.decrUsedNum(userCoupon.getCouponId());
+        }
+    }
+
+    /**
+     * 查询优惠券的规则描述（day12 3.4）
+     * <p>
+     * 场景：用户中心看订单详情时，页面要展示「这个订单用了哪几张券、规则是什么」。
+     * 但 order 表里只存了用过的【用户券id】（coupon_ids 字段），没有规则文案 ——
+     * 所以查订单详情时要拿着这批 id 回来查规则。
+     * <p>
+     * ★ 为什么状态过滤传 {@code USED} 而不是 {@code UNUSED}：
+     * 要查的是「这个订单【已经用掉】的那几张券」的规则，它们的状态就是"已使用"。
+     * （传 UNUSED 会查不到，因为下单核销后券已经是 USED 了）
+     * <p>
+     * ★ 为什么必须先判空：{@code queryCouponByUserCouponIds} 的 SQL 用 {@code IN <foreach>} ——
+     * 如果传进来是空集合，{@code <foreach>} 会渲染出 {@code IN ()}，这是【SQL 语法错误】，数据库直接报错。
+     * 而"订单没用券"是完全正常的场景（couponIds 为 null / 空），所以必须提前返回。
+     *
+     * @param userCouponIds 用户优惠券 id 集合（可为空）
+     * @return 规则文案列表；查不到或入参为空时返回空集合
+     */
+    @Override
+    public List<String> queryDiscountRules(List<Long> userCouponIds) {
+        // 0.入参判空：避免 SQL 渲染成 IN () 而报语法错误（订单没用券时就是这种情况）
+        if (CollUtils.isEmpty(userCouponIds)) {
+            return CollUtils.emptyList();
+        }
+        // 1.按用户券id批量查券（多表联查 + 状态过滤为「已使用」）
+        List<Coupon> coupons = userCouponMapper.queryCouponByUserCouponIds(userCouponIds, UserCouponStatus.USED);
+        if (CollUtils.isEmpty(coupons)) {
+            return CollUtils.emptyList();
+        }
+        // 2.把每张券翻译成规则文案（复用策略模式的 getRule，和推荐方案时是同一套逻辑）
+        List<String> rules = new ArrayList<>(coupons.size());
+        for (Coupon coupon : coupons) {
+            rules.add(DiscountStrategy.getDiscount(coupon.getDiscountType()).getRule(coupon));
+        }
+        return rules;
     }
 
     /**

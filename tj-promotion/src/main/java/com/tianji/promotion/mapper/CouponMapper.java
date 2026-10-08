@@ -33,4 +33,10 @@ public interface CouponMapper extends BaseMapper<Coupon> {
      */
     @Update("UPDATE coupon SET issue_num = issue_num + 1 WHERE id = #{couponId} AND issue_num < total_num")
     int incrIssueNum(@Param("couponId") Long couponId);
+
+    @Update("UPDATE coupon SET used_num = used_num + 1 WHERE id = #{couponId}")
+    int incrUsedNum(@Param("couponId") Long couponId);
+
+    @Update("UPDATE coupon SET used_num = used_num - 1 WHERE id = #{couponId}")
+    int decrUsedNum(@Param("couponId") Long couponId);
 }

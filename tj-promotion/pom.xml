@@ -87,6 +87,28 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
+
+        <!--seata：分布式事务（day12 3.2.5 / 3.3.5）
+            本服务是 RM（资源管理器）角色：被 tj-trade 的全局事务拉起，
+            对 user_coupon / coupon 的修改要和 tj-trade 那边的订单写入保持原子。
+            依赖 DataSourceProxy 自动代理数据源，并把回滚信息写进 tj_promotion.undo_log。
+            写法照抄 tj-course：排除自带低版本 starter（1.4.2），显式引入 1.5.1。-->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-seata</artifactId>
+            <exclusions>
+                <!--版本较低，1.4.2，因此排除-->
+                <exclusion>
+                    <artifactId>seata-spring-boot-starter</artifactId>
+                    <groupId>io.seata</groupId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <artifactId>seata-spring-boot-starter</artifactId>
+            <groupId>io.seata</groupId>
+            <version>${seata-version}</version>
+        </dependency>
     </dependencies>
     <build>
         <finalName>${project.artifactId}</finalName>

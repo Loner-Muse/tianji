@@ -1,17 +1,20 @@
 package com.tianji.promotion.controller;
 
+import com.tianji.api.dto.promotion.CouponDiscountDTO;
+import com.tianji.api.dto.promotion.OrderCouponDTO;
+import com.tianji.api.dto.promotion.OrderCourseDTO;
 import com.tianji.common.domain.dto.PageDTO;
 import com.tianji.promotion.domain.query.UserCouponQuery;
 import com.tianji.promotion.domain.vo.CouponVO;
+import com.tianji.promotion.service.IDiscountService;
 import com.tianji.promotion.service.IUserCouponService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * <p>
@@ -55,6 +58,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserCouponController {
 
     private final IUserCouponService userCouponService;
+    private final IDiscountService discountService;
 
     /**
      * 手动领取优惠券 ★ day11 2.4 的核心接口
@@ -135,5 +139,42 @@ public class UserCouponController {
     @GetMapping("/page")
     public PageDTO<CouponVO> queryMyCouponPage(UserCouponQuery query) {
         return userCouponService.queryMyCouponPage(query);
+    }
+    @ApiOperation("查询我的优惠券可用方案")
+    @PostMapping("/available")
+    public List<CouponDiscountDTO> findDiscountSolution(@RequestBody List<OrderCourseDTO> orderCourses){
+        return discountService.findDiscountSolution(orderCourses);
+    }
+    @ApiOperation("核销指定优惠券")
+    @PutMapping("/use")
+    public void writeOffCoupon(@ApiParam("用户优惠券id集合") @RequestParam("couponIds") List<Long> userCouponIds){
+        userCouponService.writeOffCoupon(userCouponIds);
+    }
+    @ApiOperation("根据券方案计算订单优惠明细")
+    @PostMapping("/discount")
+    public CouponDiscountDTO queryDiscountDetailByOrder(
+            @RequestBody OrderCouponDTO orderCouponDTO){
+        return discountService.queryDiscountDetailByOrder(orderCouponDTO);
+    }
+    @ApiOperation("退还指定优惠券")
+    @PutMapping("/refund")
+    public void refundCoupon(@ApiParam("用户优惠券id集合") @RequestParam("couponIds") List<Long> userCouponIds){
+        userCouponService.refundCoupon(userCouponIds);
+    }
+
+    /**
+     * 查询优惠券的规则描述（day12 3.4）
+     * <p>
+     * 给交易服务的「订单详情」用：order 表里只存了用过的用户券id，
+     * 详情页要展示「用了哪几张券 + 规则文案」，所以拿 id 回来查规则。
+     * <p>
+     * 用 GET：这是纯查询，没有副作用。
+     * couponIds 走 query string（?couponIds=1&amp;couponIds=2），所以用 @RequestParam。
+     */
+    @ApiOperation("查询优惠券的规则描述")
+    @GetMapping("/rules")
+    public List<String> queryDiscountRules(
+            @ApiParam("用户优惠券id集合") @RequestParam("couponIds") List<Long> userCouponIds){
+        return userCouponService.queryDiscountRules(userCouponIds);
     }
 }
