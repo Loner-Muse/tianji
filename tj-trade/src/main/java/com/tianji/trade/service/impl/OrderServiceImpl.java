@@ -267,15 +267,20 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         List<OrderCourseVO> courses = BeanUtils.copyList(courseInfos, OrderCourseVO.class);
         // 2.计算总价
         int total = courseInfos.stream().mapToInt(CourseSimpleInfoDTO::getPrice).sum();
-        // TODO 3.计算折扣
-        int discountAmount = 0;
+        // 3.计算折扣：组装订单课程(含三级分类id,用于券范围筛选) → Feign调促销服务推荐优惠方案
+        List<OrderCourseDTO> orderCourses = courseInfos.stream()
+                .map(ci -> new OrderCourseDTO().setId(ci.getId()).setCateId(ci.getThirdCateId()).setPrice(ci.getPrice()))
+                .collect(Collectors.toList());
+        List<CouponDiscountDTO> discountSolution = promotionClient.findDiscountSolution(orderCourses);
         // 4.生成订单id
         long orderId = IdWorker.getId();
         // 5.组织返回
         OrderConfirmVO vo = new OrderConfirmVO();
         vo.setOrderId(orderId);
         vo.setTotalAmount(total);
-        vo.setDiscountAmount(discountAmount);
+        // 方案列表按优惠金额降序,第一个就是最优方案;无可用方案(promotion降级/无券)时兜底0
+        vo.setDiscountAmount(CollUtils.isEmpty(discountSolution) ? 0 : discountSolution.get(0).getDiscountAmount());
+        vo.setDiscounts(discountSolution);
         vo.setCourses(courses);
         return vo;
     }
