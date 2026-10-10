@@ -14,7 +14,8 @@ public class LikedTimesCheckTask {
 
     private final ILikedRecordService recordService;
 
-    @Scheduled(fixedDelay = 20000)
+    // 点赞数同步周期:3秒(原20秒太长,用户点赞后刷新页面读不到新值,体验差)
+    @Scheduled(fixedDelay = 3000)
     public void checkLikedTimes(){
         for (String bizType : BIZ_TYPES) {
             recordService.readLikedTimesAndSendMessage(bizType, MAX_BIZ_SIZE);
